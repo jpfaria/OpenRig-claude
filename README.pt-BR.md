@@ -21,7 +21,10 @@ Suba o OpenRig com o servidor MCP ligado:
 openrig --mcp
 ```
 
-O `.mcp.json` do plugin aponta o cliente para `http://127.0.0.1:4123` — sem configuração manual.
+O `.mcp.json` do plugin fia dois servidores MCP automaticamente — sem configuração manual:
+
+- **`openrig`** em `http://127.0.0.1:4123` — a rig viva (commands, resources, prompts).
+- **`playwright`** via `npx @playwright/mcp@latest` — browser headless para a skill de tone-builder raspar fontes JS-heavy (tonedb.co, groundguitar, killerrig, …) quando o `WebFetch` não dá conta. Precisa de Node.js (`npx`); a primeira execução baixa o Chromium (~300 MB em `~/.cache/ms-playwright/`).
 
 ### Claude Desktop
 

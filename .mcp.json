@@ -3,6 +3,10 @@
     "openrig": {
       "type": "http",
       "url": "http://127.0.0.1:4123"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
     }
   }
 }
