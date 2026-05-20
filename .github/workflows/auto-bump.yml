@@ -1,0 +1,48 @@
+name: auto-bump
+
+# Bumps the patch component of `.claude-plugin/plugin.json` `version` on every
+# push to main (except the bot's own bump commit, marked with `[skip ci]`).
+# Tags the new version (vX.Y.Z) so /plugin update picks it up — the Claude
+# Code client gates on this field.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Bump patch in plugin.json
+        id: bump
+        run: |
+          set -euo pipefail
+          old=$(jq -r .version .claude-plugin/plugin.json)
+          IFS=. read -r maj min pat <<< "$old"
+          new="${maj}.${min}.$((pat + 1))"
+          echo "Bumping ${old} → ${new}"
+          tmp=$(mktemp)
+          jq --arg v "$new" '.version = $v' .claude-plugin/plugin.json > "$tmp"
+          mv "$tmp" .claude-plugin/plugin.json
+          echo "version=${new}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit, tag, push
+        env:
+          NEW: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/plugin.json
+          git commit -m "chore: bump plugin.json to ${NEW} [skip ci]"
+          git tag "v${NEW}"
+          git push origin main --follow-tags
