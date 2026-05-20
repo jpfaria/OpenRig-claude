@@ -7,7 +7,10 @@
   "plugins": [
     {
       "name": "openrig",
-      "source": ".",
+      "source": {
+        "source": "github",
+        "repo": "jpfaria/OpenRig-claude"
+      },
       "description": "Drive a running OpenRig rig from any AI client (Claude Desktop/Code, Cursor) via OpenRig's built-in MCP server: build tones, tweak the chain, switch presets. Bundles the openrig-tone-builder skill and auto-wires the MCP server."
     }
   ]
