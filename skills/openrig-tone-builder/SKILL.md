@@ -54,7 +54,7 @@ Hit sources **in order**, stopping when you have a confident gear list (instrume
 
 | Priority | Source | Why |
 |---|---|---|
-| 1 | `https://www.tonedb.co/` (search by song or artist) | Crowdsourced, song-specific, often has signal chain explicit. JS-heavy -- if WebFetch returns 404 or empty, ask the user to paste the page text. |
+| 1 | `https://www.tonedb.co/` (search by song or artist) | Crowdsourced, song-specific, often has signal chain explicit. JS-heavy -- if WebFetch returns 404 or empty, fall back to the Playwright MCP (see fallback ladder below). |
 | 2 | `https://www.groundguitar.com/tone-breakdown/` (per-album breakdowns) | Detailed per-song gear listings with chain order. |
 | 3 | `https://killerrig.com/` (e.g. `killerrig.com/<artist>-amp-settings-and-tone-guide/`) | Numeric knob settings per song. |
 | 4 | `https://musicstrive.com/<artist>-amp-settings/` | Often splits settings per song and per guitarist (rhythm vs lead). |
@@ -65,7 +65,17 @@ Hit sources **in order**, stopping when you have a confident gear list (instrume
 
 When two sources disagree on knob values, prefer the one that names the song explicitly. If they all give general guidance, weight them equally and pick the median.
 
-If WebFetch returns 404 on a guessed URL, fall back to WebSearch with the artist + song + "tone" / "amp settings" / "signal chain" -- don't keep guessing URL slugs.
+**Fallback ladder when `WebFetch` fails or returns empty (common on JS-heavy sources like tonedb.co):**
+
+1. **Playwright MCP** -- render the page in a real browser and read the DOM:
+   - `mcp__playwright__browser_navigate { url }`
+   - optionally `mcp__playwright__browser_wait_for { text: "<phrase you expect on the page>" }` so JS-injected content has time to mount
+   - `mcp__playwright__browser_snapshot` -- treat its text output as if it were a `WebFetch` body
+   - `mcp__playwright__browser_close` when done with that source
+2. **`WebSearch`** with `<artist> <song> tone` / `amp settings` / `signal chain` -- don't keep guessing URL slugs.
+3. **Ask the user** to paste the page text. Last resort only -- the Playwright MCP is bundled with this plugin precisely so you don't have to.
+
+Playwright is a research aid; it does **not** change the iron rule above. `MODEL_ID`s and parameter paths still come exclusively from `blocks-reference.md`, never from a scraped page.
 
 ### 2. Map gear to OpenRig models
 
