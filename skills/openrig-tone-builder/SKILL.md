@@ -27,7 +27,7 @@ real time, and vice-versa.
 
 ## Iron rule -- the catalog source of truth
 
-**The ONLY catalog source you may consult for `MODEL_ID`s and parameters is `docs/user-guide/blocks-reference.md`.** Specifically the **Model ID Quick Reference** section near the top of that file, and the per-section catalogs further down.
+**The ONLY catalog source you may consult for `MODEL_ID`s and parameters is `blocks-reference.md` (co-located with this `SKILL.md` in the skill directory).** Specifically the **Model ID Quick Reference** section near the top of that file, and the per-section catalogs further down.
 
 You MUST NOT:
 
@@ -69,7 +69,7 @@ If WebFetch returns 404 on a guessed URL, fall back to WebSearch with the artist
 
 ### 2. Map gear to OpenRig models
 
-Open `docs/user-guide/blocks-reference.md` and do the lookup yourself for **every** piece of gear in the chain. There is intentionally no precomputed mapping table in this skill -- those tables go stale silently and produce wrong `MODEL_ID`s. The Quick Reference does not.
+Open `blocks-reference.md` (next to this `SKILL.md`) and do the lookup yourself for **every** piece of gear in the chain. There is intentionally no precomputed mapping table in this skill -- those tables go stale silently and produce wrong `MODEL_ID`s. The Quick Reference does not.
 
 Process per piece of gear:
 
@@ -160,7 +160,7 @@ After `save_project` succeeds, summarize to the user:
 Read `openrig://project` back and confirm:
 
 - [ ] The target chain contains the blocks from the plan, in order.
-- [ ] Every `model:` referenced appears in `docs/user-guide/blocks-reference.md` Quick Reference. If not, you invented or guessed a model -- go back to the Quick Reference and pick a real one.
+- [ ] Every `model:` referenced appears in `blocks-reference.md` Quick Reference. If not, you invented or guessed a model -- go back to the Quick Reference and pick a real one.
 - [ ] Every parameter you set is a documented `path` for that model in `blocks-reference.md`.
 - [ ] Disabled-by-default blocks (tuner) read back disabled.
 - [ ] `save_project` returned without error.
