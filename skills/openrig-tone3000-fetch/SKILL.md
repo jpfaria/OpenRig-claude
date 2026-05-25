@@ -54,9 +54,12 @@ TONE3000_ANON="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJl
 | Function | Method + URL |
 |---|---|
 | Search / list | `POST https://api.tone3000.com/rest/v1/rpc/search_tones_a2` with headers `apikey`, `Authorization: Bearer`, `content-profile: public`, `Content-Type: application/json`. Body: `{"query_term":"<q>","page_number":1,"page_size":<n>,"order_by":"newest","tag_names":null,"make_names":null,"gear_filters":null,"is_calibrated":false,"size_filters":null,"usernames":null}`. `order_by="newest"` for "latest"; set `query_term` for search; `gear_filters=["ir"]` etc. to filter. |
-| Tone detail | `GET https://api.tone3000.com/rest/v1/tones?id=eq.<id>&select=*` |
+| Tone detail (description, license, links, images) | `GET https://api.tone3000.com/rest/v1/tones?id=eq.<id>&select=*` |
+| Tone summary with **makes/tags/model_name/models_count** (NOT in `/tones`) | `POST /rpc/search_tones_a2` with `query_term=<first 2-3 words of the title>`, then pick the row matching `.id` client-side. |
 | Models in tone | `GET https://api.tone3000.com/rest/v1/models?tone_id=eq.<id>&select=id,name,model_url,size,position,architecture_version,created_at` |
 | Download (no headers) | `GET https://api.tone3000.com/storage/v1/object/public/models/<filename>` — public bucket, **no auth**. |
+
+> ⚠ The `/rest/v1/tones` table does **not** expose `makes` or `tags` (they live in junction tables that PostgREST denies to `anon`). You MUST recover them via the search RPC.
 
 If any call returns 401, the anon JWT may have rotated — open
 `https://www.tone3000.com/` in the `playwright` MCP, grep the page
@@ -99,14 +102,27 @@ grep -rl "tone3000.com/tones/<id>$" "$PLUGINS_REPO/plugins/source"
 
 If any path is returned → status is `imported`; else `new`.
 
-**Show a tone:**
+**Show a tone** — three calls, because `makes`/`tags` require the search RPC:
 
 ```bash
+ID=<id>
+# 1) description, license, links, images, title — from the table
 curl -sS -H "apikey: $TONE3000_ANON" -H "Authorization: Bearer $TONE3000_ANON" \
-  "https://api.tone3000.com/rest/v1/tones?id=eq.<id>&select=*" | jq '.[0]'
+  "https://api.tone3000.com/rest/v1/tones?id=eq.$ID&select=*" | jq '.[0]'
+# 2) makes, tags, model_name, gear, platform — from the search RPC
+TITLE_PREFIX="<first 2-3 words of the title from step 1>"
+curl -sS -X POST \
+  -H "apikey: $TONE3000_ANON" -H "Authorization: Bearer $TONE3000_ANON" \
+  -H "Content-Type: application/json" -H "content-profile: public" \
+  -d "{\"query_term\":\"$TITLE_PREFIX\",\"page_number\":1,\"page_size\":20,\"order_by\":\"newest\",\"tag_names\":null,\"make_names\":null,\"gear_filters\":null,\"is_calibrated\":false,\"size_filters\":null,\"usernames\":null}" \
+  "https://api.tone3000.com/rest/v1/rpc/search_tones_a2" \
+  | jq --argjson id "$ID" '.[] | select(.id == $id) | {makes, tags, gear, platform, model_name}'
+# 3) the captures
 curl -sS -H "apikey: $TONE3000_ANON" -H "Authorization: Bearer $TONE3000_ANON" \
-  "https://api.tone3000.com/rest/v1/models?tone_id=eq.<id>&select=id,name,model_url,size,position,architecture_version,created_at" | jq
+  "https://api.tone3000.com/rest/v1/models?tone_id=eq.$ID&select=id,name,model_url,size,position,architecture_version,created_at" | jq
 ```
+
+If step 2 returns nothing (older tone whose title prefix returns >20 newer matches first), retry with a longer `query_term` or increment `page_number`.
 
 ### Import (full flow)
 
