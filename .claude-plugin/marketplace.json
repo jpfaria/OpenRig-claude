@@ -12,6 +12,14 @@
         "repo": "jpfaria/OpenRig-claude"
       },
       "description": "Drive a running OpenRig rig from any AI client (Claude Desktop/Code, Cursor) via OpenRig's built-in MCP server: build tones, tweak the chain, switch presets. Bundles the openrig-tone-builder skill and auto-wires the MCP server."
+    },
+    {
+      "name": "ux-ui-mastery",
+      "source": {
+        "source": "github",
+        "repo": "phazurlabs/ux-ui-mastery"
+      },
+      "description": "UX/UI design mastery — 19 skills covering NNG heuristics, desktop / mobile / web design, accessibility, component patterns, design systems, and visual hierarchy. Required companion when working on OpenRig's Slint UI."
     }
   ]
 }
