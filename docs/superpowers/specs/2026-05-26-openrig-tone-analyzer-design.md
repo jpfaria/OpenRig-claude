@@ -193,11 +193,14 @@ truth.
   on the section's most stable tonal frame (lowest centroid variance).
 - **`distortion.gain_character`** — `clean | crunch | distortion | high_gain`.
   Decision rules (documented in `_common.py`, pinned in tests):
-  - `clean`     — THD < 3% **and** crest_factor_db > 12
+  - `clean`     — THD < 3%
   - `crunch`    — 3% ≤ THD < 10%
   - `distortion`— 10% ≤ THD < 25%
-  - `high_gain` — THD ≥ 25% **or** (THD ≥ 15% and band[2560]/band[640] > 2.0)
-  Confidence = `min(1.0, |THD − boundary| / 5%)`.
+  - `high_gain` — THD ≥ 25%, OR (THD ≥ 15% AND band[2560] − band[640] > 6 dB)
+  Confidence = distance from nearest boundary in normalized units, clipped to
+  `[0, 1]`. Crest factor was considered but dropped as a gate — sustained
+  clean playing has low crest by default and shouldn't be misclassified as
+  crunch.
 - **`time_fx.reverb_rt60_s`** — estimated from the decay tail of detected
   note-offs within the section. If no clean decay is detectable, RT60 is set
   to null and confidence to 0.0.

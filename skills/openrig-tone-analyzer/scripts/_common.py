@@ -258,8 +258,9 @@ def classify_gain_character(
     Returns (label, confidence). Confidence is a heuristic distance from the
     nearest decision boundary, clipped to [0, 1].
     """
-    # primary rule on THD
-    if thd_pct < 3.0 and crest_db > 12.0:
+    # primary rule on THD only — crest factor varies with playing technique
+    # (sustained = low crest, plucked = high crest) and shouldn't gate "clean".
+    if thd_pct < 3.0:
         label = "clean"
         boundary = 3.0
         dist = boundary - thd_pct

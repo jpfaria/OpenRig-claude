@@ -24,13 +24,17 @@ HERE = Path(__file__).resolve().parent
 
 
 def synth_di(duration_s: float, fundamental_hz: float, harmonics: int = 5) -> np.ndarray:
-    """Sum of sine partials with light vibrato — clean DI signal (sustained)."""
+    """Sum of sine partials with light vibrato — clean DI signal (sustained).
+
+    Realistic clean guitar DI has weak harmonics (~5% of fundamental). Synth
+    that pattern so the THD-based classifier sees this as "clean".
+    """
     n = int(round(duration_s * SR))
     t = np.arange(n, dtype=np.float64) / SR
     vibrato = 1.0 + 0.003 * np.sin(2 * np.pi * 5.5 * t)
-    signal = np.zeros(n, dtype=np.float64)
-    for k in range(1, harmonics + 1):
-        amp = 1.0 / k
+    signal = np.sin(2 * np.pi * fundamental_hz * t * vibrato)
+    for k in range(2, harmonics + 1):
+        amp = 0.04 / k
         signal += amp * np.sin(2 * np.pi * fundamental_hz * k * t * vibrato)
     signal /= np.max(np.abs(signal)) + 1e-9
     envelope = np.minimum(1.0, np.minimum(t * 50, (duration_s - t) * 50))
