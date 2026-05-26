@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 
 
 def synth_di(duration_s: float, fundamental_hz: float, harmonics: int = 5) -> np.ndarray:
-    """Sum of sine partials with light vibrato — clean DI signal."""
+    """Sum of sine partials with light vibrato — clean DI signal (sustained)."""
     n = int(round(duration_s * SR))
     t = np.arange(n, dtype=np.float64) / SR
     vibrato = 1.0 + 0.003 * np.sin(2 * np.pi * 5.5 * t)
@@ -35,6 +35,26 @@ def synth_di(duration_s: float, fundamental_hz: float, harmonics: int = 5) -> np
     signal /= np.max(np.abs(signal)) + 1e-9
     envelope = np.minimum(1.0, np.minimum(t * 50, (duration_s - t) * 50))
     return (signal * envelope * 0.6).astype(np.float32)
+
+
+def synth_pluck(duration_s: float, fundamental_hz: float, harmonics: int = 5, decay_s: float = 0.4) -> np.ndarray:
+    """Single pluck: harmonic content with exponential decay envelope.
+
+    The decay is fast enough that detecting echoes (delay) and reverb tail
+    against silence becomes tractable.
+    """
+    n = int(round(duration_s * SR))
+    t = np.arange(n, dtype=np.float64) / SR
+    signal = np.zeros(n, dtype=np.float64)
+    for k in range(1, harmonics + 1):
+        amp = 1.0 / k
+        # higher harmonics decay faster (string physics approximation)
+        decay_k = decay_s / k
+        signal += amp * np.sin(2 * np.pi * fundamental_hz * k * t) * np.exp(-t / decay_k)
+    signal /= np.max(np.abs(signal)) + 1e-9
+    # short attack to avoid click
+    attack = np.minimum(1.0, t * 200)
+    return (signal * attack * 0.8).astype(np.float32)
 
 
 def apply_softclip(signal: np.ndarray, gain: float) -> np.ndarray:
@@ -90,10 +110,16 @@ def main() -> int:
     distorted = apply_softclip(clean, gain=8.0)
     write("distorted_di.wav", distorted)
 
-    reverb = apply_convolve_reverb(clean, rt60_s=1.4)
+    # Reverb and delay are tested on a pluck source: the decay tail (reverb)
+    # and the periodic echoes (delay) are only audible/measurable against the
+    # silence that follows a transient.
+    # Reverb and delay are tested on a fast-decaying pluck: source's natural
+    # decay must be much shorter than the FX tail so the FX dominates.
+    pluck = synth_pluck(4.0, fundamental_hz=220.0, harmonics=6, decay_s=0.08)
+    reverb = apply_convolve_reverb(pluck, rt60_s=1.4)
     write("reverb_tail.wav", reverb)
 
-    delayed = add_delay(clean, time_ms=380.0, feedback=0.25, mix=0.3)
+    delayed = add_delay(pluck, time_ms=380.0, feedback=0.55, mix=0.7)
     write("delayed_echo.wav", delayed)
 
     silence_pad = np.zeros(int(1.5 * SR), dtype=np.float32)
