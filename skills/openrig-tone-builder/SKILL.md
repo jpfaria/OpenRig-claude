@@ -27,7 +27,7 @@ real time, and vice-versa.
 
 ## Iron rule -- the catalog source of truth
 
-**The ONLY catalog source you may consult for `MODEL_ID`s and parameters is `blocks-reference.md` (co-located with this `SKILL.md` in the skill directory).** Specifically the **Model ID Quick Reference** section near the top of that file, and the per-section catalogs further down.
+**The ONLY catalog source you may consult for `MODEL_ID`s and parameters is [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) in the `jpfaria/OpenRig-plugins` repo.** Specifically the **Model ID Quick Reference** section near the top of that file, and the per-section catalogs further down. WebFetch the URL if you don't have the repo checked out locally.
 
 You MUST NOT:
 
@@ -35,7 +35,7 @@ You MUST NOT:
 - Read existing presets to copy their `MODEL_ID` strings or parameter shapes. They drift from the registry; the doc does not.
 - Guess or invent model IDs based on what "sounds right". Every ID is a string the runtime hard-matches.
 
-If a model you need is not in `blocks-reference.md`, that is a doc bug -- stop, tell the user, suggest opening an issue against the doc. Do not work around it by reading source.
+If a model you need is not in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md), that is a doc bug -- stop, tell the user, suggest opening an issue against the doc. Do not work around it by reading source.
 
 The doc is authoritative because issue #375 closed the gap that previously forced source reads. If you find yourself reaching for `find crates/`, `grep MODEL_ID`, or `Read` on an `.rs` file -- you are violating this skill.
 
@@ -75,18 +75,18 @@ When two sources disagree on knob values, prefer the one that names the song exp
 2. **`WebSearch`** with `<artist> <song> tone` / `amp settings` / `signal chain` -- don't keep guessing URL slugs.
 3. **Ask the user** to paste the page text. Last resort only -- the Playwright MCP is bundled with this plugin precisely so you don't have to.
 
-Playwright is a research aid; it does **not** change the iron rule above. `MODEL_ID`s and parameter paths still come exclusively from `blocks-reference.md`, never from a scraped page.
+Playwright is a research aid; it does **not** change the iron rule above. `MODEL_ID`s and parameter paths still come exclusively from [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md), never from a scraped page.
 
 ### 2. Map gear to OpenRig models
 
-Open `blocks-reference.md` (next to this `SKILL.md`) and do the lookup yourself for **every** piece of gear in the chain. There is intentionally no precomputed mapping table in this skill -- those tables go stale silently and produce wrong `MODEL_ID`s. The Quick Reference does not.
+Open [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) (locally if you have the repo, otherwise WebFetch the URL) and do the lookup yourself for **every** piece of gear in the chain. There is intentionally no precomputed mapping table in this skill -- those tables go stale silently and produce wrong `MODEL_ID`s. The Quick Reference does not.
 
 Process per piece of gear:
 
 1. **Look up the exact match first.** Search the Quick Reference for the brand and model name (e.g. "Big Muff", "Mesa Rectifier", "DS-2"). Many real-world pedals/amps have a direct entry. Use it.
 2. **If no direct match**, scan the relevant section (Amp / Gain / etc.) for the closest **voicing** -- not the closest brand. Read the Description column.
 3. **Document the substitution** in your final reply (Step 5).
-4. **For NAM amps**, follow the parameter conventions documented in `blocks-reference.md` under `### Parameters -- NAM amps (catalog conventions)`.
+4. **For NAM amps**, follow the parameter conventions documented in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) under `### Parameters -- NAM amps (catalog conventions)`.
 
 Always prefer NAM amps over Native amps when the song has a real amp model -- Native preamps are generic.
 
@@ -94,7 +94,7 @@ Always prefer NAM amps over Native amps when the song has a real amp model -- Na
 
 The chain below is the **plan**. You realize it by calling tools, not by
 writing a file. Use the model IDs/params you resolved in Step 2 from
-`blocks-reference.md`.
+[blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md).
 
 Steps:
 
@@ -112,7 +112,7 @@ Steps:
    - text → `set_block_parameter_text { chain, block, path, value }`
    - enum/option → `select_block_parameter_option { chain, block, path, value }`
    `path` and value domains are exactly what that model's section in
-   `blocks-reference.md` documents. If a section says "no user-adjustable
+   [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) documents. If a section says "no user-adjustable
    parameters", set none.
 4. **Disabled-by-default blocks** (e.g. the tuner): after `add_block`, call
    `toggle_block_enabled { chain, block }` so it lands disabled like the plan.
@@ -170,11 +170,11 @@ After `save_project` succeeds, summarize to the user:
 Read `openrig://project` back and confirm:
 
 - [ ] The target chain contains the blocks from the plan, in order.
-- [ ] Every `model:` referenced appears in `blocks-reference.md` Quick Reference. If not, you invented or guessed a model -- go back to the Quick Reference and pick a real one.
-- [ ] Every parameter you set is a documented `path` for that model in `blocks-reference.md`.
+- [ ] Every `model:` referenced appears in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) Quick Reference. If not, you invented or guessed a model -- go back to the Quick Reference and pick a real one.
+- [ ] Every parameter you set is a documented `path` for that model in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md).
 - [ ] Disabled-by-default blocks (tuner) read back disabled.
 - [ ] `save_project` returned without error.
-- [ ] No knowledge of `MODEL_ID`s came from anywhere other than `blocks-reference.md`.
+- [ ] No knowledge of `MODEL_ID`s came from anywhere other than [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md).
 
 ## Red flags -- STOP
 
@@ -183,7 +183,7 @@ If you catch yourself doing any of the following, you have left the skill. Stop,
 - Running `find crates/` or `grep MODEL_ID` or `Read` on any `.rs` file.
 - Writing a YAML preset file to disk (`~/.openrig/presets/`, `presets/`, anywhere). This skill drives the live rig via MCP; it does not write files. If MCP is unavailable, stop and tell the user (see Precondition).
 - Reading another preset to copy a `MODEL_ID` or `params:` shape.
-- Saying "I think the model id is X" without having seen X in `blocks-reference.md` in the current session.
+- Saying "I think the model id is X" without having seen X in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) in the current session.
 - Telling the user "the doc seems incomplete, let me check the source". The doc is the source.
 
 ## Anti-patterns
@@ -192,7 +192,7 @@ If you catch yourself doing any of the following, you have left the skill. Stop,
 - ❌ Using a `preamp` block for a full amp song -- `preamp` is preamp-only (no power amp / cab). Songs almost always want `amp`.
 - ❌ Writing YAML to disk as a "shortcut". The whole point of this skill now is the live rig via MCP. No files.
 - ❌ Skipping the source citation. Always show your work.
-- ❌ Pattern-matching another preset's structure instead of the spec in `blocks-reference.md`.
+- ❌ Pattern-matching another preset's structure instead of the spec in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md).
 - ❌ Reading `.rs` "just to confirm". The Quick Reference is the contract.
 
 ## Common rationalizations -- forbidden
