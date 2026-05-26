@@ -252,21 +252,42 @@ def classify_gain_character(
     thd_pct: float,
     crest_db: float,
     band_energy_db: list[float],
+    peak_db: float | None = None,
 ) -> tuple[str, float]:
-    """Apply the spec's decision rules.
+    """Pick a gain-character bucket and a [0, 1] confidence.
 
-    Returns (label, confidence). Confidence is a heuristic distance from the
-    nearest decision boundary, clipped to [0, 1].
+    Decision rules:
+    - **Silent section** (peak_db < -45): default to "clean" with low
+      confidence (0.2). THD/centroid on near-silence are dominated by noise.
+    - **Polyphonic confusion** (thd_pct > 50): fundamental-detection breaks
+      down on chords or multi-note content; the resulting THD is bogus.
+      Fall back to the upper-mid / low-mid band-energy ratio (band[5] vs
+      band[3], i.e. 2560 Hz vs 640 Hz). Distortion shifts energy upward;
+      clean playing keeps the low/mid bias intact.
+    - **Normal monophonic content**: standard THD thresholds.
     """
-    # primary rule on THD only — crest factor varies with playing technique
-    # (sustained = low crest, plucked = high crest) and shouldn't gate "clean".
+    # silence / near-silence — THD on noise is meaningless
+    if peak_db is not None and peak_db < -45.0:
+        return "clean", 0.2
+
+    # polyphonic / chord content where THD blows up to ~100%+
+    if thd_pct > 50.0:
+        if len(band_energy_db) >= 6:
+            high = band_energy_db[5]   # 2560 Hz band
+            low = band_energy_db[3]    # 640 Hz band
+            spread = high - low
+            if spread > 0.0:
+                # upper-mid energy exceeds low/mid: actual distortion
+                return ("high_gain", 0.7) if spread > 6.0 else ("distortion", 0.5)
+            return ("clean", 0.6)
+        return ("clean", 0.3)
+
+    # standard monophonic THD ladder
     if thd_pct < 3.0:
         label = "clean"
-        boundary = 3.0
-        dist = boundary - thd_pct
+        dist = 3.0 - thd_pct
     elif thd_pct < 10.0:
         label = "crunch"
-        # confidence is min distance to nearest neighbor (3 or 10)
         dist = min(thd_pct - 3.0, 10.0 - thd_pct)
     elif thd_pct < 25.0:
         label = "distortion"
@@ -275,13 +296,12 @@ def classify_gain_character(
         label = "high_gain"
         dist = thd_pct - 25.0
 
-    # secondary high_gain override
-    if thd_pct >= 15.0 and len(band_energy_db) >= 5:
-        mid_high = band_energy_db[5]  # 2560
-        low_mid = band_energy_db[3]   # 640
-        if (mid_high - low_mid) > 6.0:  # strong upper-mid bias
+    # secondary high_gain override on upper-mid bias
+    if thd_pct >= 15.0 and len(band_energy_db) >= 6:
+        spread = band_energy_db[5] - band_energy_db[3]
+        if spread > 6.0:
             label = "high_gain"
-            dist = max(dist, mid_high - low_mid - 6.0)
+            dist = max(dist, spread - 6.0)
 
     confidence = float(min(1.0, max(0.0, dist) / 5.0))
     if label == "clean":
@@ -302,6 +322,9 @@ def estimate_rt60_s(signal: np.ndarray, sr: int) -> tuple[float | None, float]:
     """
     sig = mono_mixdown(signal).astype(np.float64)
     if len(sig) < int(0.3 * sr):
+        return None, 0.0
+    # Silence gate — RT60 fits on noise produce arbitrary slopes.
+    if float(np.max(np.abs(sig))) < 10 ** (-45.0 / 20.0):
         return None, 0.0
 
     # smooth envelope via abs + low-pass
@@ -358,6 +381,11 @@ def detect_delay(signal: np.ndarray, sr: int) -> tuple[bool, int | None, float |
     """
     sig = mono_mixdown(signal).astype(np.float64)
     if len(sig) < int(0.7 * sr):
+        return False, None, None
+
+    # Skip detection on near-silent material: template matching on background
+    # noise can correlate by chance and produce phantom echoes.
+    if float(np.max(np.abs(sig))) < 10 ** (-45.0 / 20.0):  # peak < -45 dB
         return False, None, None
 
     # envelope: rectify + 10 ms moving average, downsample to 1 kHz
@@ -421,12 +449,16 @@ def detect_delay(signal: np.ndarray, sr: int) -> tuple[bool, int | None, float |
 def detect_modulation(signal: np.ndarray, sr: int) -> tuple[bool, float | None, float | None]:
     """Best-effort modulation detection (chorus/flanger/tremolo).
 
-    Looks for a low-frequency periodicity in the amplitude envelope between
-    0.5 Hz and 10 Hz. Returns (present, rate_hz, depth_estimate_0_1).
-    Conservative: high false-negative rate is fine; false positives are not.
+    Looks for a periodic amplitude-envelope component between 3 Hz and 12 Hz
+    (the typical chorus/tremolo/phaser rate range). Slower envelope variation
+    is natural song dynamics (fades, build-ups) and is excluded by design.
+    Returns (present, rate_hz, depth_estimate_0_1).
     """
     sig = mono_mixdown(signal).astype(np.float64)
     if len(sig) < int(2.0 * sr):
+        return False, None, None
+    # Silence gate — envelope noise on a quiet section has its own spectrum.
+    if float(np.max(np.abs(sig))) < 10 ** (-45.0 / 20.0):
         return False, None, None
     env = np.abs(sig)
     window = max(1, int(0.01 * sr))
@@ -444,7 +476,10 @@ def detect_modulation(signal: np.ndarray, sr: int) -> tuple[bool, float | None, 
         env_ds = np.pad(env_ds, (0, n_fft - len(env_ds)))
     spec = np.abs(np.fft.rfft(env_ds[:n_fft]))
     freqs = np.fft.rfftfreq(n_fft, d=step / sr)
-    band = (freqs > 0.5) & (freqs < 10.0)
+    # Real tremolo / chorus / phaser rates sit in [3, 12] Hz. Slower envelope
+    # variation (0.5–3 Hz) is natural song dynamics (fades, breath, build-ups),
+    # not modulation FX. Tightening this kills false positives on full tracks.
+    band = (freqs >= 3.0) & (freqs <= 12.0)
     if not band.any():
         return False, None, None
     band_spec = spec[band]

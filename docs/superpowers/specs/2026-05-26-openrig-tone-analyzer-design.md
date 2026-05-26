@@ -193,14 +193,32 @@ truth.
   on the section's most stable tonal frame (lowest centroid variance).
 - **`distortion.gain_character`** — `clean | crunch | distortion | high_gain`.
   Decision rules (documented in `_common.py`, pinned in tests):
-  - `clean`     — THD < 3%
-  - `crunch`    — 3% ≤ THD < 10%
-  - `distortion`— 10% ≤ THD < 25%
-  - `high_gain` — THD ≥ 25%, OR (THD ≥ 15% AND band[2560] − band[640] > 6 dB)
-  Confidence = distance from nearest boundary in normalized units, clipped to
-  `[0, 1]`. Crest factor was considered but dropped as a gate — sustained
-  clean playing has low crest by default and shouldn't be misclassified as
-  crunch.
+  - **Silence gate.** If `peak_db < -45`, default to `clean` with confidence
+    `0.20`. THD/centroid on near-silence are dominated by noise floor.
+  - **Polyphonic fallback.** If `THD > 50%`, the fundamental-detection
+    breaks down on chords or multi-note content and the resulting THD is
+    bogus. Fall back to the upper-mid / low-mid band ratio:
+    `band[2560] − band[640] > 6 dB` → `high_gain` (conf 0.7),
+    `> 0 dB` → `distortion` (conf 0.5),
+    else → `clean` (conf 0.6). This is the path that fires on full
+    polyphonic mixes (a real guitar stem of a clean piano-driven song
+    triggers THD≈200% but actual upper-mid energy is low).
+  - **Monophonic THD ladder** (when `THD ≤ 50%`):
+    - `clean`      — THD < 3%
+    - `crunch`     — 3% ≤ THD < 10%
+    - `distortion` — 10% ≤ THD < 25%
+    - `high_gain`  — THD ≥ 25%, OR (THD ≥ 15% AND band[2560] − band[640] > 6 dB)
+  Confidence = distance from nearest boundary in normalized units, clipped
+  to `[0, 1]`. Crest factor was considered but dropped as a gate —
+  sustained clean playing has low crest by default and shouldn't be
+  misclassified as crunch.
+
+  Delay / RT60 / modulation detection also gate on `peak_db ≥ -45` —
+  template matching on silence correlates with itself by chance, RT60 fits
+  on noise produce arbitrary slopes, and 0.5–3 Hz envelope variation on a
+  whole track catches natural song dynamics (fades, build-ups) as phantom
+  modulation. Modulation detection narrowed to [3, 12] Hz (real
+  chorus/tremolo/phaser rates).
 - **`time_fx.reverb_rt60_s`** — estimated from the decay tail of detected
   note-offs within the section. If no clean decay is detectable, RT60 is set
   to null and confidence to 0.0.

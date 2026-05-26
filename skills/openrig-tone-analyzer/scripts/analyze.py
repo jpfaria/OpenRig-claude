@@ -57,7 +57,7 @@ def _build_section_fingerprint(
     flatness = _common.compute_spectral_flatness(signal_section, sr)
     thd = _common.estimate_thd_pct(signal_section, sr)
     odd_even = _common.compute_odd_even_harmonic_ratio_db(signal_section, sr)
-    tone_profile, tone_conf = _common.classify_gain_character(thd, crest_db, band_energy)
+    tone_profile, tone_conf = _common.classify_gain_character(thd, crest_db, band_energy, peak_db=peak_db)
     rt60, rt60_conf = _common.estimate_rt60_s(signal_section, sr)
     delay_present, delay_time, delay_fb = _common.detect_delay(signal_section, sr)
     mod_present, mod_rate, mod_depth = _common.detect_modulation(signal_section, sr)
