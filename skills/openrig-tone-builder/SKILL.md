@@ -93,6 +93,50 @@ OpenRig is running:
   precondition check passes; if the MCP server is offline, fall back to
   asking again rather than silently writing a file.
 
+## Step 0 — Fingerprint the reference audio FIRST (when WAVs are provided)
+
+If the user provided ANY reference WAV (isolated stem, full mix,
+multiple stems), invoke the **`openrig:openrig-tone-analyzer` skill on
+each WAV before research, before gear mapping, before any MCP call**.
+The fingerprint is the **primary input** that shapes every subsequent
+decision; research only fills in what the signal cannot reveal
+(specific amp model/era, brand of pedal). Going straight to research
+is the most common failure mode of this skill — it biases the preset
+toward what "sounds right on paper" rather than what the recording
+actually contains.
+
+How:
+
+1. For each reference WAV the user mentioned, invoke
+   `openrig:openrig-tone-analyzer` with the file path. The skill writes
+   a JSON fingerprint plus spectrogram PNGs to disk and returns the
+   paths. The JSON carries `centroid`, `rolloff`, `band_energy`,
+   `gain_character`, `time_fx` (delay/reverb estimates) and `source.kind`
+   (rhythm/lead/solo/clean — often inferred from filename).
+2. **Read every fingerprint JSON before opening any research URL.** The
+   fingerprint tells you:
+   - EQ curve to target (centroid + band_energy → parametric EQ shape)
+   - Gain stage (gain_character → clean / crunch / high gain)
+   - Time effects (time_fx → delay time, feedback, reverb size)
+   - Role hint (source.kind → which preset name to use, and whether
+     to split into multiple presets)
+3. If multiple stems were provided (rhythm + lead, or several solos),
+   fingerprint **each one separately** — they produce different presets
+   and the analyzer captures that.
+
+If the user provided **no** reference audio, skip Step 0 and declare
+out loud in the chat: "no reference WAV provided — Step 0 (analyzer
+fingerprint) skipped, this preset will be research-only and cannot be
+validated objectively". The user can then choose to provide a WAV or
+accept the limitation.
+
+**Stem vs mix caveat:** an isolated stem's centroid describes the
+guitar; a full-mix centroid is dominated by drums/bass/keys and is
+only an upper bound on what the guitar contributes. When the WAV is a
+full mix, treat the fingerprint's centroid as a ceiling, look at the
+spectrogram of guitar-only sections, and ask the user for an isolated
+stem before committing.
+
 ## Precondition (MCP path only) — the MCP server must be connected
 
 If the user picked the MCP path:
@@ -142,6 +186,11 @@ role-less presets drift toward generic and the user notices.
 
 ### 1. Research the signal chain
 
+**The Step 0 fingerprint comes first.** Research is here to fill gaps
+the analyzer cannot resolve (specific amp model/era, brand of pedal,
+recording context) — not to drive the build. If you have not yet
+fingerprinted every reference WAV the user provided, go back to Step 0.
+
 Hit sources **in order**, stopping when you have a confident gear list (instrument → pedals → amp → cab → mic). Always cite which sources you used.
 
 | Priority | Source | Why |
@@ -163,21 +212,27 @@ When two sources disagree on knob values, prefer the one that names the song exp
 
 Open [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) and do the lookup yourself for **every** piece of gear in the chain. Always prefer NAM amps over Native amps when the song has a real amp model.
 
-**Fingerprint caveat (`openrig-tone-analyzer` data):**
+**The Step 0 fingerprint is your primary input here.** Walk each
+field against the `blocks-reference.md` catalog:
 
-- **Isolated guitar stem** (rhythm/lead WAV) — the centroid, rolloff,
-  band energy, gain_character and time_fx fields describe the **guitar
-  itself**. Trust them, they map directly to your EQ / amp choice.
-- **Full mix** — the centroid is dominated by drums, bass and piano
-  (mid-low energy). Treat the mix's centroid as an **upper bound** on
-  what the guitar contributes; do NOT EQ-darken your preset just
-  because the mix's centroid is low. Look at the spectrogram of the
-  guitar's identifiable parts (introdução, solo) instead. When in
-  doubt, ask the user for an isolated stem before committing.
+- `centroid` + `band_energy` → parametric EQ band gains
+- `gain_character` → amp model class (clean / crunch / high-gain) and
+  whether a boost block is needed
+- `time_fx.delay` → delay block model, time_ms, feedback, mix
+- `time_fx.reverb` → reverb block (room vs hall), room_size, mix
+- `source.kind` → preset name role and whether to build multiple
+  presets
 
-If `openrig-tone-analyzer` produced a fingerprint, look up `source.kind`
-or the WAV title — most isolated stems are labelled `rhythm`, `lead`,
-`solo`, etc. in the filename.
+Research only fills in what the fingerprint cannot reveal (the exact
+amp model the player used, brand of overdrive, era of cab).
+
+**Stem vs mix reminder** (also covered in Step 0):
+
+- **Isolated guitar stem** — every fingerprint field describes the
+  guitar. Trust them.
+- **Full mix** — the centroid is an upper bound dominated by
+  drums/bass/keys. Do NOT EQ-darken just because the mix's centroid is
+  low. Prefer asking the user for an isolated stem.
 
 ### 3. Build the preset on the live rig (MCP) — new slot, never overwrite
 
@@ -383,6 +438,9 @@ measured match. Flag this in the chat reply so the user knows.
 - Asking the user for a DI WAV file. **You don't.** The DI is bundled
   at `<openrig-source-root>/assets/audio/input.wav`. Only the *wet
   reference stem* comes from the user.
+- Opening any research URL, calling any MCP tool, or planning the FX
+  layout **before** invoking `openrig:openrig-tone-analyzer` on every
+  reference WAV the user provided. Step 0 comes first. No exceptions.
 
 ## Common rationalizations -- forbidden
 
@@ -400,6 +458,9 @@ measured match. Flag this in the chat reply so the user knows.
 | "The previous version of this preset worked without rendering, so I can skip this time" | Whoever told you that lied. **Every preset built without render+compare in this skill's history has been thrown away by the user.** Clocks v1 is the canonical example. No exceptions. |
 | "There's no `openrig render` available, I'll skip" | If `openrig render` is genuinely missing from PATH, STOP and tell the user — do not silently skip the gate. The CLI ships with OpenRig; check `which openrig` and `openrig --help` for the `render` subcommand. |
 | "The user didn't give me a DI, I can't render" | The user **never** gives you a DI. The canonical DI ships at `<openrig-source-root>/assets/audio/input.wav`. Reading the skill for the path is on you. |
+| "I'll research first to know what to look for, then fingerprint" | Wrong order. Research without the fingerprint is theater — you bias toward what "sounds right on paper". Step 0 (fingerprint) comes before Step 1 (research). |
+| "The user gave me WAVs but I already know the song, fingerprint is redundant" | The WAVs are the user's reference take, not the song you remember. Era, mix, performance and the user's playing all shift the fingerprint. Run Step 0. |
+| "I'll fingerprint just one stem and reuse it for the other role" | Rhythm and lead have different gain stages, different time effects, different EQs. Fingerprint **each** WAV — that's what produces the role-specific presets the skill promises. |
 
 ## Workflow (file-only path)
 
