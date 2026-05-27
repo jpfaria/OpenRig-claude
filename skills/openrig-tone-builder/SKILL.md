@@ -89,13 +89,14 @@ OpenRig is running:
   and follow the **MCP workflow**.
 * If **(b) file** — skip the MCP precondition and follow the **File-only
   workflow** at the bottom. On this path the **ONLY MCP calls allowed
-  are reads of the resources `openrig://plugins` and `openrig://project`**
-  (used by **Step 1b** for an installedness check without mutating the
-  rig). **Every other MCP call is forbidden** — that includes mutations
-  (`add_block`, `save_chain_preset`, `apply_rig_nav`,
-  `set_block_parameter_*`, etc.) AND non-mutating tools (e.g.
-  `reload_plugin_catalog`, `register_recent_project`, `start_midi_learn`,
-  `set_language`, `set_compact_view_enabled`). Allowlist, not blocklist.
+  are reads of the resources `openrig://plugins`, `openrig://project`,
+  and `openrig://plugins/{id}/params`** (used by **Step 1b** for
+  installedness + schema lookup without mutating the rig). **Every
+  other MCP call is forbidden** — that includes mutations (`add_block`,
+  `save_chain_preset`, `apply_rig_nav`, `set_block_parameter_*`, etc.)
+  AND non-mutating tools (e.g. `reload_plugin_catalog`,
+  `register_recent_project`, `start_midi_learn`, `set_language`,
+  `set_compact_view_enabled`). Allowlist, not blocklist.
 * If the user does not answer, default to **(a) MCP** but only after the
   precondition check passes; if the MCP server is offline, fall back to
   asking again rather than silently writing a file.
@@ -162,24 +163,37 @@ If the user picked the MCP path:
 The rig is shared: changes you make via MCP are reflected in the open
 GUI in real time, and vice-versa.
 
-## Iron rule -- two sources of truth, do not confuse them
+## Iron rule -- three sources of truth, do not confuse them
 
-Catalog work has TWO orthogonal questions, and each has exactly ONE authoritative source:
+Catalog work has THREE orthogonal questions, and each has exactly ONE authoritative source:
 
-1. **"Does this `MODEL_ID` exist and what are its parameter paths / ranges / NAM-vs-native patterns?"** → [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) in the `jpfaria/OpenRig-plugins` repo. Use the **Model ID Quick Reference** near the top and the per-section catalogs further down. WebFetch the URL if the repo isn't checked out locally. This doc is the **schema** source.
+1. **"Which `MODEL_ID`s exist AND are installed on this rig RIGHT NOW?"** → the MCP resource `openrig://plugins` (returns every plugin loaded by THIS instance, with `id`, `display_name`, `brand`, `block_type`, `backend`). This is the **discovery / installedness** source. See **Step 2.5**.
 
-2. **"Is this `MODEL_ID` actually installed on the user's rig RIGHT NOW?"** → the MCP resource `openrig://plugins` (returns every plugin loaded by THIS instance, with `id`, `display_name`, `brand`, `block_type`, `backend`). A model present in `blocks-reference.md` but absent from `openrig://plugins` will fail `add_block` at runtime. You MUST consult this before every `add_block` call on the MCP path — see **Step 2.5**.
+2. **"For a chosen `MODEL_ID`, what are its parameter paths, types, ranges, defaults, and enum options?"** → the MCP resource `openrig://plugins/{id}/params` (returns `{params: {effect_type, model, display_name, audio_mode, parameters: [{path, label, group, widget, unit, domain, default_value, ...}]}}`). The `domain` field decides which typed param tool you call:
+   - `FloatRange` / `IntRange` → `set_block_parameter_number`
+   - `Bool` (string literal) → `set_block_parameter_bool`
+   - `Enum` (`{options: [{value, label}, ...]}`) → `select_block_parameter_option` (pass `value`, NOT `label`)
+   - anything else (text, etc.) → `set_block_parameter_text`
+
+   This is the **schema** source. See **Step 2.6**. For an already-placed block you can also read `openrig://chains/{chain}/blocks/{block}/params` — same shape with `current_value` added per parameter (useful for "tweak this preset" flows).
+
+3. **"What knob *values* do real players use for this style or song? Which amp/cab pairings are canonical? Where should a metal rhythm EQ start?"** → [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) in the `jpfaria/OpenRig-plugins` repo. This is the **patterns / recipes** source — it answers "good starting points", NOT "what's a valid param". Use it for tone recipes per style, per-song knob settings, and per-amp signature patterns. WebFetch the URL if the repo isn't checked out locally.
+
+The three cooperate: **discovery** (`openrig://plugins`) tells you the `MODEL_ID` exists on the rig; **schema** (`openrig://plugins/{id}/params`) tells you the path is `eq.bass` not `bass` and the range is 0–10 not 0–100; **recipes** (`blocks-reference.md`) tells you metal rhythm wants ~7.5 in that range.
 
 You MUST NOT:
 
-- Open or grep any file under `crates/block-*/src/` to discover model IDs or parameters. Ever. Not for "double-checking", not for "the doc might be stale", not for "just one quick lookup".
-- Read existing presets to copy their `MODEL_ID` strings or parameter shapes. They drift from the registry; the doc does not.
-- Guess or invent model IDs based on what "sounds right". Every ID is a string the runtime hard-matches.
-- Assume "doc lists it → it's installed". The two sources diverge constantly (NAM/IR packs are user-installed; the doc lags the rig in either direction). Always cross-check.
+- Open or grep any file under `crates/block-*/src/` to discover model IDs or parameters. Ever. Not for "double-checking", not for "the schema might be stale", not for "just one quick lookup". The MCP schema IS the runtime — it cannot be stale.
+- Read existing presets to copy their `MODEL_ID` strings or parameter shapes. They drift; the MCP schema does not.
+- Guess or invent model IDs OR param paths based on what "sounds right" / what you "remember from a similar amp". Every ID and every path is a string the runtime hard-matches. Dotted paths (`eq.bass`, `noise_gate.threshold_db`) and bare paths (`bass`, `gain`) BOTH occur depending on the plugin — and `bass` ≠ `eq.bass` to the runtime. Always read the live schema.
+- Trust `blocks-reference.md` for **schema** questions (path/type/range/enum). The doc is the **recipes** source; the runtime is the schema source. The doc lags or drifts; the MCP schema does not.
+- Trust the older heuristics this skill used to carry ("NAM amps expose only `character`/`cabinet`+`gain`"). Those were guesses written before the schema resource existed — the schema replaces them.
 
-If a model you need is not in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md), that is a **doc bug** -- stop, tell the user, suggest opening an issue against the doc. Do not work around it by reading source.
+If a model you need is not in `openrig://plugins`, that is a **missing-capture case** — go to **Step 2.5**. Do NOT silently substitute.
 
-If a model IS in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) but **not in `openrig://plugins`**, that is a **missing-capture case** — go to **Step 2.5**. Do NOT silently substitute.
+If `openrig://plugins/{id}/params` returns `parameters: []` for a model, the block has no exposed params — just `add_block` and move on. This is normal for some fixed-processor blocks.
+
+If [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) has no recipe for the gear you're chasing, that is a **doc gap but NOT a blocker** — design the tone from the analyzer fingerprint + the MCP schema defaults, optionally suggest the user open a doc issue.
 
 ## Mandatory inputs
 
@@ -220,14 +234,14 @@ Hit sources **in order**, stopping when you have a confident gear list (instrume
 
 When two sources disagree on knob values, prefer the one that names the song explicitly. If they all give general guidance, weight them equally and pick the median.
 
-**Fallback ladder when `WebFetch` fails or returns empty (common on JS-heavy sources like tonedb.co):** Playwright MCP → WebSearch → ask the user to paste page text. Playwright is a research aid; `MODEL_ID`s and parameter paths still come exclusively from [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md).
+**Fallback ladder when `WebFetch` fails or returns empty (common on JS-heavy sources like tonedb.co):** Playwright MCP → WebSearch → ask the user to paste page text. Playwright is a research aid; the *recipes* still come from [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md), `MODEL_ID` discovery from `openrig://plugins`, and **param schema from `openrig://plugins/{id}/params`** — never from web research.
 
 ### 2. Map gear to OpenRig models — and respect stem vs mix evidence
 
-Open [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) and do the lookup yourself for **every** piece of gear in the chain. Always prefer NAM amps over Native amps when the song has a real amp model.
+Pick candidate `MODEL_ID`s by reading `openrig://plugins` (the **discovery** source from the Iron Rule) and matching `block_type` + `brand` + `display_name` to the gear you researched. Use [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) **only** for *recipes* — which amp family pairs with which cab, suggested knob ranges per style, per-song settings. Always prefer NAM amps over Native amps when the song has a real amp model. The param schema for whichever IDs you pick comes from `openrig://plugins/{id}/params` in **Step 2.6**, not from this step.
 
 **The Step 0 fingerprint is your primary input here.** Walk each
-field against the `blocks-reference.md` catalog:
+field against the `blocks-reference.md` *recipes*:
 
 - `centroid` + `band_energy` → parametric EQ band gains
 - `gain_character` → amp model class (clean / crunch / high-gain) and
@@ -275,7 +289,37 @@ How:
 
 4. **One ask per missing capture.** If four blocks miss four different captures, you ask four times — or batch them in one message listing all four with (a)/(b) per row. Do NOT collapse "I'll substitute all of them" into a single unilateral decision.
 
-5. Do not proceed to Step 3 until every `MODEL_ID` in the plan is either present in `openrig://plugins` OR explicitly substituted with the user's OK in (3b).
+5. Do not proceed to Step 2.6 until every `MODEL_ID` in the plan is either present in `openrig://plugins` OR explicitly substituted with the user's OK in (3b).
+
+### 2.6. Read the parameter schema for every chosen `MODEL_ID` (BEFORE any `set_block_parameter_*`)
+
+For each `MODEL_ID` that survived Step 2.5, read `openrig://plugins/<MODEL_ID>/params` **once per build** and cache the response **for the duration of this build only**. Never reuse a schema from a prior conversation, a prior invocation, your training memory, or another agent's session — every build starts fresh against the live MCP. The schema is the runtime; it cannot be stale, but it can change between binary versions, so a snapshot from before is only safe to discard.
+
+The schema tells you:
+
+- **Which param paths exist** for this exact plugin. Paths are often dotted (`eq.bass`, `noise_gate.threshold_db`); do NOT assume top-level names. Two amps in the same family can expose different paths.
+- **Which typed param tool to call**, decided by the `domain` field:
+  - `FloatRange` / `IntRange` → `set_block_parameter_number`
+  - `Bool` (the string `"Bool"`) → `set_block_parameter_bool`
+  - `Enum` → `select_block_parameter_option` — pass the option's `value`, NOT its `label`
+  - anything else (text, etc.) → `set_block_parameter_text`
+- **Valid numeric range and step** (`domain.FloatRange.{min,max,step}`) so you don't push a value the runtime clamps or rejects.
+- **Valid enum options** (`domain.Enum.options[].value`) so you don't pick something that doesn't exist.
+- **`default_value`** — the rig's chosen baseline. If you don't have a recipe value from `blocks-reference.md` AND the analyzer fingerprint doesn't constrain it, fall back to the default rather than guessing.
+
+**`parameters: []`** means the block has no exposed params — just `add_block`, do NOT call any `set_block_parameter_*` on it. (Normal for fixed-processor blocks; the schema is the only way to know which ones those are.)
+
+**If the resource read errors** for a given `MODEL_ID`, STOP and tell the user. You may still call `add_block` for that block (Step 2.5 already confirmed installedness), but skip every `set_block_parameter_*` on it — never guess paths from memory.
+
+**Forbidden:**
+
+- Calling `set_block_parameter_*` with a path you didn't read from `openrig://plugins/{id}/params` in this step.
+- Picking the typed param tool from memory of "similar" plugins instead of from the live `domain` field.
+- Using a `label` instead of the `value` for an `Enum` domain.
+- Pushing a numeric value outside `domain.min` / `domain.max`.
+- Re-reading `openrig://plugins/{id}/params` mid-build to "see if it changed". The schema is stable per binary version; one read at the start is enough. (If the build changes underneath you, you have bigger problems.)
+
+The schema and the recipes are **complementary, not redundant**: `blocks-reference.md` says "metal rhythm wants gain around 7.5 on this amp family"; `openrig://plugins/{id}/params` says "the path is `eq.gain` and the range is 0–10". Use both.
 
 ### 3. Build the preset on the live rig (MCP) — new slot, never overwrite
 
@@ -331,11 +375,18 @@ Steps:
    automatically. The result is `BlockAdded { chain, block }` — capture
    the new block id.
 
-5. **Set parameters** with the typed param tools on each block id:
-   - numeric → `set_block_parameter_number { chain, block, path, value }`
-   - boolean → `set_block_parameter_bool { chain, block, path, value }`
+5. **Set parameters** using the schema you read in **Step 2.6**. For each
+   parameter you want to set, the schema entry tells you which tool to
+   call based on `domain`:
+   - `FloatRange` / `IntRange` → `set_block_parameter_number { chain, block, path, value }` — value clamped to `domain.min`/`domain.max`
+   - `Bool` → `set_block_parameter_bool { chain, block, path, value }`
+   - `Enum` → `select_block_parameter_option { chain, block, path, value }` — pass the option's `value`, NOT its `label`
    - text → `set_block_parameter_text { chain, block, path, value }`
-   - enum/option → `select_block_parameter_option { chain, block, path, value }`
+
+   `path` always comes from the schema's `parameters[].path` — never
+   from memory, never from `blocks-reference.md`. If the schema's
+   `parameters: []` for this `MODEL_ID`, skip this sub-step for this
+   block entirely.
 
 6. **Disabled-by-default blocks**: after `add_block`, call
    `toggle_block_enabled { chain, block }`.
@@ -356,17 +407,19 @@ Steps:
 ### Plan (electric guitar, rock/metal/clean default — adjust per song style)
 
 ```text
-1.  dynamics/ compressor_studio_clean    enabled:true   params: parallel mix=20-40 (clean rhythm/lead)
-2.  filter  / native_guitar_eq           enabled:true   params: low/low_mid/high_mid/high (start flat, tilt by ±2 dB max)
-3.  dynamics/ gate_basic                  enabled:true   params: attack_ms=0.1, release_ms=<60-120>, threshold=<25-65>
-4.  gain    / <gain_model_id>             enabled:<bool> params: per blocks-reference.md (only if the song uses a boost/drive)
-5.  amp     / <amp_model_id>              enabled:true   params: one of the NAM amp patterns in blocks-reference.md
-6.  filter  / eq_eight_band_parametric    enabled:true   params: mimic real bass/mid/treble/presence (see Step 4)
-7.  delay   / analog_warm  (or other)     enabled:<bool> params: time_ms=<from BPM math>, feedback=<10-40>, mix=<5-35>
-8.  reverb  / room (rhythm) | hall (lead) enabled:true   params: room_size + damping + mix per analyzer RT60
-9.  dynamics/ limiter_brickwall           enabled:true   params: defaults (threshold=-1.0, ceiling=-0.1, release_ms=100)
-10. gain    / volume                      enabled:true   params: volume=<70-90>, mute=false
+1.  dynamics/ <compressor_model_id>       enabled:true   intent: parallel-style clean compression (~20-40% mix for clean rhythm/lead)
+2.  filter  / <guitar_eq_model_id>        enabled:true   intent: start flat, tilt ±2 dB max
+3.  dynamics/ <gate_model_id>              enabled:true   intent: fast attack, release tuned to playing dynamics, threshold above noise floor
+4.  gain    / <gain_model_id>              enabled:<bool> intent: only if the song uses a boost/drive (recipe in blocks-reference.md per style)
+5.  amp     / <amp_model_id>              enabled:true   intent: NAM amp for songs with a real amp model; recipe in blocks-reference.md
+6.  filter  / <parametric_eq_model_id>    enabled:true   intent: mimic real bass/mid/treble/presence shape (see Step 4)
+7.  delay   / <delay_model_id>            enabled:<bool> intent: time from BPM math (recipe in blocks-reference.md per style)
+8.  reverb  / <reverb_model_id>           enabled:true   intent: room for rhythm, hall for lead; size + mix per analyzer RT60
+9.  dynamics/ <limiter_model_id>          enabled:true   intent: brick-wall safety on the bus
+10. gain    / <volume_model_id>            enabled:true   intent: per-preset output trim
 ```
+
+The **`intent:`** column is the recipe-class hint (what this block is *for*). The actual `MODEL_ID`s are picked in Step 2 (from `openrig://plugins` + recipes in `blocks-reference.md`); the actual param **paths, types, ranges, and enum options** come from `openrig://plugins/{id}/params` in **Step 2.6** — never from this template. Do NOT read names like "mix", "attack_ms", "threshold", "feedback" from this table and assume they are the schema paths for the chosen plugin; they are the *concepts* you'll set, and the actual path/type for each concept comes from Step 2.6 only.
 
 **Tuner and spectrum analyzer are NOT in this plan.** `tuner_chromatic`
 and `spectrum_analyzer` are NOT valid `add_block` kinds — the runtime
@@ -377,17 +430,40 @@ processor. The preset has no business toggling them.
 
 Adjust per song style:
 
+All numeric *values* below are recipe-class targets (what you're aiming for); the actual param **paths** to set them via come from each block's Step 2.6 schema.
+
 - **Clean / acoustic**: drop the boost (skip block 4), drop the gate, switch to a clean amp, add a body IR for acoustic.
-- **Funk / clean rhythm**: keep `compressor_studio_clean` paralleled with `mix: 30-50`. Lower amp gain.
-- **Lead solo**: bump `volume` to 85-90, raise delay mix to 12-25%, switch reverb to `hall`, larger room_size, higher mix.
-- **Delay-driven (Edge/Buckland/Mayer rhythm)**: time = dotted-eighth at the song BPM (`60000 / bpm * 1.5 / 2`), feedback 25-35%, mix 30-40% so the delay pattern is clearly audible.
-- **Doom / drone**: drop boost, raise reverb mix to 25%+, add `tape_vintage` delay.
+- **Funk / clean rhythm**: keep the compressor paralleled with a high wet-mix value. Lower amp gain.
+- **Lead solo**: bump the volume block's output to ~85-90% of its range, raise delay mix to ~12-25%, switch reverb to a hall, larger room size, higher mix.
+- **Delay-driven (Edge/Buckland/Mayer rhythm)**: time = dotted-eighth at the song BPM (`60000 / bpm * 1.5 / 2`), feedback ~25-35%, mix ~30-40% so the delay pattern is clearly audible.
+- **Doom / drone**: drop boost, raise reverb mix to 25%+, swap delay model for a tape-style one.
 
 ### 4. Knob translation rule
 
-NAM amp captures have **knobs baked into the capture**. Most NAM amps expose only structural switches (`character` / `cabinet` + `gain`) -- not continuous bass/mid/treble/master controls. Approximate the EQ shape with the parametric EQ block **after** the amp (block 6).
+NAM amp captures have **knobs baked into the capture**, but what knobs
+the *block* exposes varies per plugin — there is no universal NAM
+control surface. Read each block's actual param set from
+`openrig://plugins/{id}/params` at build time (Step 2.6); do NOT
+assume from the family, the brand, or memory of "similar" amps. The
+schema is the runtime, it cannot be stale.
 
-For Native preamps (`american_clean`, `brit_crunch`, `modern_high_gain`) you DO get all knobs -- set numeric values directly on the amp block instead of via parametric EQ.
+Three patterns you'll encounter in the schema (decide per-amp, never
+assume):
+
+- **Structural-only**: enum/select for character or preset, plus I/O
+  level and maybe a built-in noise gate / EQ. No continuous
+  bass/mid/treble at the amp level — shape EQ with the parametric EQ
+  block **after** the amp (block 6).
+- **Full continuous knobs**: bass/middle/treble/master directly on the
+  amp. Set them on the amp block; skip the parametric EQ unless the
+  analyzer fingerprint needs more shaping than the amp exposes.
+- **`parameters: []`**: the block is a fixed processor — just
+  `add_block`, no `set_block_parameter_*` calls at all.
+
+Which pattern any given `MODEL_ID` falls into is **only** knowable by
+reading its schema. This skill does NOT enumerate per-plugin examples
+on purpose — they would lock the skill to a snapshot in time and
+recreate the staleness problem the MCP schema source exists to solve.
 
 ### 5. Provenance comment in the chat reply
 
@@ -447,7 +523,6 @@ measured match. Flag this in the chat reply so the user knows.
 - [ ] `save_chain_preset` returned without error and the preset name
       shows up in the bank when you re-read
       `openrig://chains/<chain>/presets`.
-- [ ] Every `model:` referenced appears in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) Quick Reference.
 - [ ] Every `MODEL_ID` actually passed to `add_block` is present in
       `openrig://plugins` — verified by reading the resource in
       **Step 2.5**.
@@ -455,6 +530,16 @@ measured match. Flag this in the chat reply so the user knows.
       user's explicit (a) import via `openrig:openrig-tone3000-fetch` /
       (b) substitute choice, and the resulting substitution (if any) is
       recorded in the Step 5 provenance.
+- [ ] Every `path` passed to `set_block_parameter_*` came from
+      `openrig://plugins/<MODEL_ID>/params` read in **Step 2.6** —
+      never from memory, never from `blocks-reference.md`, never
+      copied from another preset.
+- [ ] The typed param tool (`_number` / `_bool` / `_text` /
+      `select_..._option`) was chosen by the schema's `domain` field
+      (`FloatRange`/`IntRange` → `_number`, `Bool` → `_bool`, `Enum` →
+      `select_..._option`), not by guessing from the param's name.
+- [ ] For any block whose schema returned `parameters: []`, no
+      `set_block_parameter_*` was called on it.
 - [ ] You did NOT call `add_chain` (this skill never does).
 - [ ] You did NOT call `save_project` (the preset is the unit of work).
 - [ ] You did NOT add `tuner_chromatic` or `spectrum_analyzer` via
@@ -509,6 +594,20 @@ measured match. Flag this in the chat reply so the user knows.
 - Narrowing the **Step 2.5** check to "just the NAM/IR captures" on
   the assumption that stock/native blocks are obviously installed.
   Every `MODEL_ID` gets checked — the cost is one resource read.
+- Calling `set_block_parameter_*` with a `path` you didn't read from
+  `openrig://plugins/{id}/params` in **Step 2.6**. The runtime
+  hard-matches the string; `bass` and `eq.bass` are different params,
+  and one of them silently does nothing. Trust the schema, not your
+  memory of "similar amps".
+- Picking the typed param tool (`_number` vs `_bool` vs `_text` vs
+  `select_..._option`) from the param's *name* instead of from the
+  schema's `domain` field. A param called `bias` could be a knob
+  (FloatRange) on one plugin and a switch (Bool) on another — the
+  schema decides.
+- Reading the param schema from `blocks-reference.md` instead of from
+  the MCP resource. The doc is the *recipes* source (which value to
+  use); the **schema** (which path/type/range/enums exist) lives only
+  in `openrig://plugins/{id}/params`.
 - Opening any research URL, calling any MCP tool, or planning the FX
   layout **before** invoking `openrig:openrig-tone-analyzer` on every
   reference WAV the user provided. Step 0 comes first. No exceptions.
@@ -538,6 +637,11 @@ measured match. Flag this in the chat reply so the user knows.
 | "O usuário pediu o preset, fetchar capture é fora de escopo da tone-builder" | Fora de escopo seria dispatch direto; a Step 2.5 só OFERECE o fetch como (a) e delega à `openrig-tone3000-fetch` quando o user aceita. Não oferecer = decidir pelo (b) escondido. |
 | "Vou deixar o `add_block` falhar e aí rodo Step 2.5 quando descobrir o erro" | Wrong order. 2.5 é **precondition** pra Step 3, não recovery. O error path polui o log, deixa estado parcial na chain e contorna a pergunta (a)/(b). Leia `openrig://plugins` PRIMEIRO. |
 | "Os blocos stock (`compressor_*`, `gate_basic`, `limiter_brickwall`) são built-in, óbvio que estão instalados — checo só os NAM/IR" | A Step 2.5 diz **for every `MODEL_ID`**. Stock pode estar desabilitado em builds custom, renomeado entre versões, ou ausente em forks. O custo do cross-check é uma leitura de resource — não vale a pena economizar. |
+| "Eu lembro o path desse param do amp similar (`bass`, `gain`, etc.) — não preciso ler `openrig://plugins/{id}/params`" | Memória mata. Plugins diferentes na mesma família usam paths diferentes (dotted vs flat, prefixos distintos, knobs ausentes). `set_block_parameter_number` com path errado falha em silêncio. Leia o schema dinâmico — uma leitura de resource por `MODEL_ID`. |
+| "`blocks-reference.md` lista os params desse amp, então tá schema suficiente" | O doc é a fonte de *recipes* (qual valor escolher dentro do range válido), não de schema. Schema autoritativo é `openrig://plugins/{id}/params` — runtime, não pode estar stale. O doc pode estar drift. |
+| "Vou inferir o tool (`_number` vs `_bool`) pelo nome do param" | O `domain` da schema decide, não o nome. Mesmo param chamado `bias` pode ser `FloatRange` (knob) num plugin e `Bool` (switch) noutro. Leia `domain`. |
+| "Vou cachear o schema dessa família de amp e reusar pros similares" | Cada `MODEL_ID` tem schema próprio. Cache UM read por MODEL_ID por build — não compartilha entre famílias. Custo é mínimo (uma leitura de resource), benefício é zero erros de path. |
+| "O `domain.Enum` me dá `value` E `label`; vou passar o `label` que é mais legível" | Não. O `select_block_parameter_option` recebe o `value`. Passar o `label` falha. |
 
 ## Workflow (file-only path)
 
@@ -545,21 +649,23 @@ If the user picked the file-only path in Step −1:
 
 1. Do **steps 1, 2** of the MCP workflow (research + map gear). Skip
    the MCP precondition.
-1b. **Installedness on the file-only path.** If the OpenRig MCP server
-   happens to be reachable in this session anyway (rig running with
-   `--mcp`, just not the persistence path the user picked), run
-   **Step 2.5** to flag missing captures — the user can still opt to
-   import via `openrig:openrig-tone3000-fetch` BEFORE you write the
-   YAML, so the eventual `Load Preset` doesn't fail to resolve a
-   capture. If MCP is offline, you **cannot verify installedness from
-   here** — list **every** `MODEL_ID` your plan uses (not only the
-   exotic NAM/IR ones — also `compressor_studio_clean`, `gate_basic`,
-   `eq_eight_band_parametric`, `limiter_brickwall`, etc.) in your chat
-   reply, label the list explicitly as **"unverified — your rig may
-   not have all of these"**, and recommend the user run
-   `openrig:openrig-tone3000-fetch` against any captures they don't
-   have locally before they load the YAML in OpenRig. Do NOT silently
-   trust the plan; the user is your installedness oracle when MCP
+1b. **Installedness + schema on the file-only path.** If the OpenRig
+   MCP server happens to be reachable in this session anyway (rig
+   running with `--mcp`, just not the persistence path the user
+   picked), run **Step 2.5** to flag missing captures AND **Step 2.6**
+   to read the param schema for every chosen `MODEL_ID`. Without the
+   schema you cannot pick valid param paths for the YAML — guessed
+   paths fail silently at `Load Preset` time. If MCP is offline, you
+   **cannot verify installedness OR read the schema from here** —
+   list **every** `MODEL_ID` your plan uses (not only the exotic
+   NAM/IR ones — every block including stock processors) in your chat
+   reply, label the list explicitly as **"unverified installedness AND
+   unverified param paths — your rig may not load this YAML cleanly"**,
+   recommend the user run `openrig:openrig-tone3000-fetch` against any
+   captures they don't have locally, and recommend they load the YAML
+   once in OpenRig and check the GUI for any silently-ignored params
+   (an ignored param means the path was wrong). Do NOT silently trust
+   the plan; the user is your installedness AND schema oracle when MCP
    is offline.
 2. Determine the YAML output path:
    `~/.openrig/presets/<Song> — <Artist> (<role>).yaml` (the OS path
@@ -567,8 +673,13 @@ If the user picked the file-only path in Step −1:
    when that's configured; ask the user once if unsure).
 3. Write the YAML in the schema OpenRig's `LoadChainPreset` expects.
    The minimum is the `blocks:` list with one entry per FX block and
-   the parameters resolved from `blocks-reference.md`. The chain's I/O
-   blocks are NOT included (the preset only carries FX).
+   the parameters resolved from the **MCP schema** (`openrig://plugins/{id}/params`,
+   read in Step 1b when MCP is reachable). The recipe values come from
+   `blocks-reference.md`. The chain's I/O blocks are NOT included (the
+   preset only carries FX). If MCP is offline you cannot read the
+   schema — flag every param value as "unverified path" in a comment
+   at the top of the YAML and recommend the user load it once in
+   OpenRig and check the GUI for any silently-ignored params.
 4. Print the file path and tell the user: "Pra ouvir, abre OpenRig,
    seleciona a chain `<chain>`, e usa **Load Preset** apontando pra
    esse arquivo. Não tocou no rig em memória."
