@@ -104,6 +104,62 @@ role-less presets drift toward generic and the user notices.
 
 ## Workflow (MCP path)
 
+### 0. Check for a pre-existing preset for this song
+
+The worst-case failure mode for this skill is silently overwriting a
+preset the user spent time tuning. Run this check **before any other
+MCP call**.
+
+1. Decide which chain the preset belongs to (electric guitar / bass /
+   acoustic). If multiple chains in the project match the instrument
+   and the user did not name one in the prompt, ask once which chain
+   to write into; never pick by yourself when more than one would fit.
+
+2. Read the chain's bank:
+
+   ```
+   ReadMcpResourceTool {
+     server: "plugin_openrig_openrig",
+     uri: "openrig://chains/<chain-id>/presets"
+   }
+   ```
+
+   The response is JSON: `{ active_preset, slots: [{ index, name, key }, ...] }`.
+   The slot's display name lives in `name` (set via `rename_rig_preset`);
+   the bank's stable identifier lives in `key` (auto-generated, ignore
+   for matching).
+
+3. Construct the canonical preset name for this build:
+   `"<Song> — <Artist> (<role>)"` (em dash, single space; `<role>` is
+   `rhythm` / `lead` / `solo` / `clean` / `intro`, etc.). Examples:
+   `"Enter Sandman — Metallica (rhythm)"`, `"Clocks — Coldplay (lead)"`.
+
+4. Compare case-insensitively against every `name` in `slots[]`. A
+   match means the user already built (or started) this preset.
+
+5. **If there is a match**, do not touch the rig. Ask the user via
+   `AskUserQuestion` which of the following to do:
+
+   - **Overwrite** that slot (the skill will `apply_rig_nav` to
+     activate it, then drop and re-add its FX blocks — destructive to
+     the existing tone in that slot only).
+   - **Save under a new name** (suggest a suffixed variant such as
+     `"<Song> — <Artist> (<role>, v2)"` or
+     `"<Song> — <Artist> (<role>, takeN)"`); a brand-new slot will be
+     added.
+   - **Cancel** and stop the skill (the existing preset stays exactly
+     as it is).
+
+   Wait for the answer. Do not infer from silence.
+
+6. **If there is no match**, you will add a new slot in Step 3. Carry
+   the canonical name forward for Steps 7 (`rename_rig_preset`) and 8
+   (`save_chain_preset`).
+
+7. Document in your provenance reply (Step 5) whether you created a
+   new slot or overwrote an existing one — the user reading the diff
+   later needs to know.
+
 ### 1. Research the signal chain
 
 Hit sources **in order**, stopping when you have a confident gear list (instrument → pedals → amp → cab → mic). Always cite which sources you used.
@@ -272,10 +328,14 @@ After `save_chain_preset` succeeds, summarize:
 If the user provided a reference WAV (isolated guitar stem), close the
 feedback loop instead of stopping at "saved":
 
-1. Render a dry guitar sample through the just-saved preset via
-   `openrig-render` (headless DSP renderer): `openrig render --preset
-   "<Song> — <Artist> (<role>)" --input <user-dry-wav> --output
-   /tmp/openrig-render/<song>-<role>.wav`.
+1. Render the **canonical bundled DI** through the just-saved preset
+   via `openrig-render` (headless DSP renderer): `openrig render
+   --preset "<Song> — <Artist> (<role>)" --input
+   <openrig-source-root>/assets/audio/input.wav --output
+   /tmp/openrig-render/<song>-<role>.wav`. The DI ships with OpenRig
+   (the NAM-standardized reamp input — covers the dynamic range and
+   frequency content needed to characterize a chain). You never ask
+   the user for a DI; only the reference *wet* stem comes from them.
 2. Compare the rendered output against the reference stem with
    `openrig-tone-analyzer` in compare mode: `.venv/bin/python
    scripts/compare.py <reference-stem.wav> <rendered.wav>`. Reads as
@@ -312,6 +372,9 @@ measured match. Flag this in the chat reply so the user knows.
 - [ ] If a reference stem was provided, you ran the render+compare
       loop and either reached `diff.converged` OR documented the
       remaining gap in the chat reply.
+- [ ] The render command pointed `--input` at the bundled
+      `<openrig-source-root>/assets/audio/input.wav` — NOT a
+      user-supplied DI path, NOT a random clean WAV.
 
 ## Red flags -- STOP
 
