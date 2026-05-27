@@ -328,10 +328,14 @@ After `save_chain_preset` succeeds, summarize:
 If the user provided a reference WAV (isolated guitar stem), close the
 feedback loop instead of stopping at "saved":
 
-1. Render a dry guitar sample through the just-saved preset via
-   `openrig-render` (headless DSP renderer): `openrig render --preset
-   "<Song> — <Artist> (<role>)" --input <user-dry-wav> --output
-   /tmp/openrig-render/<song>-<role>.wav`.
+1. Render the **canonical bundled DI** through the just-saved preset
+   via `openrig-render` (headless DSP renderer): `openrig render
+   --preset "<Song> — <Artist> (<role>)" --input
+   <openrig-source-root>/assets/audio/input.wav --output
+   /tmp/openrig-render/<song>-<role>.wav`. The DI ships with OpenRig
+   (the NAM-standardized reamp input — covers the dynamic range and
+   frequency content needed to characterize a chain). You never ask
+   the user for a DI; only the reference *wet* stem comes from them.
 2. Compare the rendered output against the reference stem with
    `openrig-tone-analyzer` in compare mode: `.venv/bin/python
    scripts/compare.py <reference-stem.wav> <rendered.wav>`. Reads as
@@ -368,6 +372,9 @@ measured match. Flag this in the chat reply so the user knows.
 - [ ] If a reference stem was provided, you ran the render+compare
       loop and either reached `diff.converged` OR documented the
       remaining gap in the chat reply.
+- [ ] The render command pointed `--input` at the bundled
+      `<openrig-source-root>/assets/audio/input.wav` — NOT a
+      user-supplied DI path, NOT a random clean WAV.
 
 ## Red flags -- STOP
 
