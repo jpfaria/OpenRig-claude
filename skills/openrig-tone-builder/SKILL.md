@@ -88,7 +88,14 @@ OpenRig is running:
 * If **(a) MCP** — confirm the MCP tools are wired (precondition below)
   and follow the **MCP workflow**.
 * If **(b) file** — skip the MCP precondition and follow the **File-only
-  workflow** at the bottom. Do NOT call any MCP tool.
+  workflow** at the bottom. On this path the **ONLY MCP calls allowed
+  are reads of the resources `openrig://plugins` and `openrig://project`**
+  (used by **Step 1b** for an installedness check without mutating the
+  rig). **Every other MCP call is forbidden** — that includes mutations
+  (`add_block`, `save_chain_preset`, `apply_rig_nav`,
+  `set_block_parameter_*`, etc.) AND non-mutating tools (e.g.
+  `reload_plugin_catalog`, `register_recent_project`, `start_midi_learn`,
+  `set_language`, `set_compact_view_enabled`). Allowlist, not blocklist.
 * If the user does not answer, default to **(a) MCP** but only after the
   precondition check passes; if the MCP server is offline, fall back to
   asking again rather than silently writing a file.
@@ -155,17 +162,24 @@ If the user picked the MCP path:
 The rig is shared: changes you make via MCP are reflected in the open
 GUI in real time, and vice-versa.
 
-## Iron rule -- the catalog source of truth
+## Iron rule -- two sources of truth, do not confuse them
 
-**The ONLY catalog source you may consult for `MODEL_ID`s and parameters is [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) in the `jpfaria/OpenRig-plugins` repo.** Specifically the **Model ID Quick Reference** section near the top of that file, and the per-section catalogs further down. WebFetch the URL if you don't have the repo checked out locally.
+Catalog work has TWO orthogonal questions, and each has exactly ONE authoritative source:
+
+1. **"Does this `MODEL_ID` exist and what are its parameter paths / ranges / NAM-vs-native patterns?"** → [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) in the `jpfaria/OpenRig-plugins` repo. Use the **Model ID Quick Reference** near the top and the per-section catalogs further down. WebFetch the URL if the repo isn't checked out locally. This doc is the **schema** source.
+
+2. **"Is this `MODEL_ID` actually installed on the user's rig RIGHT NOW?"** → the MCP resource `openrig://plugins` (returns every plugin loaded by THIS instance, with `id`, `display_name`, `brand`, `block_type`, `backend`). A model present in `blocks-reference.md` but absent from `openrig://plugins` will fail `add_block` at runtime. You MUST consult this before every `add_block` call on the MCP path — see **Step 2.5**.
 
 You MUST NOT:
 
 - Open or grep any file under `crates/block-*/src/` to discover model IDs or parameters. Ever. Not for "double-checking", not for "the doc might be stale", not for "just one quick lookup".
 - Read existing presets to copy their `MODEL_ID` strings or parameter shapes. They drift from the registry; the doc does not.
 - Guess or invent model IDs based on what "sounds right". Every ID is a string the runtime hard-matches.
+- Assume "doc lists it → it's installed". The two sources diverge constantly (NAM/IR packs are user-installed; the doc lags the rig in either direction). Always cross-check.
 
-If a model you need is not in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md), that is a doc bug -- stop, tell the user, suggest opening an issue against the doc. Do not work around it by reading source.
+If a model you need is not in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md), that is a **doc bug** -- stop, tell the user, suggest opening an issue against the doc. Do not work around it by reading source.
+
+If a model IS in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) but **not in `openrig://plugins`**, that is a **missing-capture case** — go to **Step 2.5**. Do NOT silently substitute.
 
 ## Mandatory inputs
 
@@ -233,6 +247,35 @@ amp model the player used, brand of overdrive, era of cab).
 - **Full mix** — the centroid is an upper bound dominated by
   drums/bass/keys. Do NOT EQ-darken just because the mix's centroid is
   low. Prefer asking the user for an isolated stem.
+
+### 2.5. Verify each `MODEL_ID` is installed; route missing captures (BEFORE any `add_block`)
+
+The plan you just produced names specific `MODEL_ID` strings (NAM amp
+captures, IR cabs, gain pedals, etc.). Some of those names come from
+[`blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) — the **schema** source — and the doc lists what the project knows how to load, NOT what THIS rig has installed. Before calling `add_block`, you MUST cross-check every one against the **installedness** source.
+
+How:
+
+1. **Read `openrig://plugins` once** at the start of build, **BEFORE the first `add_block`** (it returns every installed plugin with `id`, `display_name`, `brand`, `block_type`, `backend`). Cache the `id` set in memory. **Discovering a missing capture via `add_block` failure is forbidden** — the gate runs upfront, not as recovery. If the resource read itself errors, STOP and ask the user before continuing; do NOT proceed optimistically.
+
+2. **For every `MODEL_ID` in the plan, check it's in that set.** "Every" = literally every one, including stock blocks like `compressor_studio_clean`, `gate_basic`, `eq_eight_band_parametric`, `limiter_brickwall`, `volume`, `native_guitar_eq`. The runtime hard-matches on the `id` string regardless of `backend`; narrowing the check to "only NAM/IR captures" is forbidden. For every miss, the user gets ONE clear choice — never make it for them:
+
+   > "Pro [bloco/papel] o capture canônico é `<MODEL_ID>` (do `<amp/cab/...>`), mas ele não está instalado nesta rig.
+   > Como prossigo?
+   > **(a) importar via `openrig:openrig-tone3000-fetch <query>`** — capture autêntico do tone3000.com, mas dispara o fluxo issue → PR → qa_audit/pack_plugins (pesado).
+   > **(b) substituir** por `<closest_installed_MODEL_ID>` (`<display_name>`, mesmo `block_type`) — rápido, mas é um *palpite no timbre*, não O timbre.
+   > Default sugerido: **(a)** quando você pediu um amp/música específico; **(b)** quando você está só esboçando."
+
+   The "Default sugerido" line is what you **recommend TO the user inside the ask message** — it is NOT a self-applied default. You always wait for the user's explicit answer. Auto-classifying the request as "just sketching" and applying (b) without sending the ask is the silent substitution this step forbids. If the user does not answer, ask once more or stop; never decide for them.
+
+3. **Apply the user's choice before resuming the build:**
+   - **(a) import** → invoke `openrig:openrig-tone3000-fetch` with the relevant search term (artist, amp model, capture name). After the fetch skill lands the file under `OpenRig-plugins` AND clears the qa_audit/pack_plugins gate, the user's OpenRig instance must reload its catalog (`reload_plugin_catalog` MCP tool) before the new `MODEL_ID` appears in `openrig://plugins`. Re-read `openrig://plugins` to confirm presence before calling `add_block`.
+   - **(b) substitute** → record the substitution explicitly in the Step 5 provenance ("substituted `<wanted>` → `<used>` per user OK"). The substitution is authorized by THIS step, not by the Step 5 disclosure.
+   - **(c) user wants to abort** → stop, do not save anything.
+
+4. **One ask per missing capture.** If four blocks miss four different captures, you ask four times — or batch them in one message listing all four with (a)/(b) per row. Do NOT collapse "I'll substitute all of them" into a single unilateral decision.
+
+5. Do not proceed to Step 3 until every `MODEL_ID` in the plan is either present in `openrig://plugins` OR explicitly substituted with the user's OK in (3b).
 
 ### 3. Build the preset on the live rig (MCP) — new slot, never overwrite
 
@@ -355,7 +398,10 @@ After `save_chain_preset` succeeds, summarize:
    of chain "gUItARRA - SETLIST"`).
 2. **Mapping table**: real gear → OpenRig model. Mark fallbacks explicitly.
 3. **Cite sources** you actually fetched.
-4. **Note uncertainty** (substitutions, missing captures).
+4. **Note uncertainty** explicitly. For any substitution that came out
+   of **Step 2.5**, name BOTH the wanted `MODEL_ID` and the installed
+   substitute (e.g. `nam_diezel_vh4` → `nam_diezel_herbert`, per user
+   OK in Step 2.5). Silent substitutions are forbidden — see Red Flags.
 5. **Tunings** mentioned as a playing hint, optionally in the preset name.
 
 ### 6. Render and A/B compare (MANDATORY validation loop — runs BEFORE you report "done")
@@ -402,6 +448,13 @@ measured match. Flag this in the chat reply so the user knows.
       shows up in the bank when you re-read
       `openrig://chains/<chain>/presets`.
 - [ ] Every `model:` referenced appears in [blocks-reference.md](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) Quick Reference.
+- [ ] Every `MODEL_ID` actually passed to `add_block` is present in
+      `openrig://plugins` — verified by reading the resource in
+      **Step 2.5**.
+- [ ] Any missing captures were resolved through **Step 2.5** with the
+      user's explicit (a) import via `openrig:openrig-tone3000-fetch` /
+      (b) substitute choice, and the resulting substitution (if any) is
+      recorded in the Step 5 provenance.
 - [ ] You did NOT call `add_chain` (this skill never does).
 - [ ] You did NOT call `save_project` (the preset is the unit of work).
 - [ ] You did NOT add `tuner_chromatic` or `spectrum_analyzer` via
@@ -438,6 +491,24 @@ measured match. Flag this in the chat reply so the user knows.
 - Asking the user for a DI WAV file. **You don't.** The DI is bundled
   at `<openrig-source-root>/assets/audio/input.wav`. Only the *wet
   reference stem* comes from the user.
+- Calling `add_block` with a `MODEL_ID` you have not cross-checked
+  against `openrig://plugins` in **Step 2.5**. The runtime hard-matches
+  IDs; an absent capture either crashes the call or silently selects
+  nothing, and the user has no way to know you guessed.
+- Silently substituting a missing capture for "the closest installed"
+  amp/cab instead of surfacing the (a) import via
+  `openrig:openrig-tone3000-fetch` / (b) substitute choice in
+  **Step 2.5**. Close-enough is the user's judgment, not yours — and
+  documenting it in Step 5 provenance after the fact does not
+  retroactively authorize a unilateral decision.
+- Calling `add_block` to "discover" which captures are missing instead
+  of reading `openrig://plugins` upfront in **Step 2.5**. The error
+  path is not a substitute for the gate — it pollutes the rig with
+  partial state and routes the agent through a recovery flow the
+  skill never validated.
+- Narrowing the **Step 2.5** check to "just the NAM/IR captures" on
+  the assumption that stock/native blocks are obviously installed.
+  Every `MODEL_ID` gets checked — the cost is one resource read.
 - Opening any research URL, calling any MCP tool, or planning the FX
   layout **before** invoking `openrig:openrig-tone-analyzer` on every
   reference WAV the user provided. Step 0 comes first. No exceptions.
@@ -461,6 +532,12 @@ measured match. Flag this in the chat reply so the user knows.
 | "I'll research first to know what to look for, then fingerprint" | Wrong order. Research without the fingerprint is theater — you bias toward what "sounds right on paper". Step 0 (fingerprint) comes before Step 1 (research). |
 | "The user gave me WAVs but I already know the song, fingerprint is redundant" | The WAVs are the user's reference take, not the song you remember. Era, mix, performance and the user's playing all shift the fingerprint. Run Step 0. |
 | "I'll fingerprint just one stem and reuse it for the other role" | Rhythm and lead have different gain stages, different time effects, different EQs. Fingerprint **each** WAV — that's what produces the role-specific presets the skill promises. |
+| "`tone3000-fetch` é pesado (issue → PR → qa_audit gate), vou só substituir" | Custo é decisão do usuário, não sua. Surface o trade (a)/(b) na **Step 2.5** e deixa o user escolher. Decidir por ele = decidir que o timbre não importa — mas ele pediu O timbre, não UM timbre. |
+| "O capture mais próximo já instalado é 'close enough'" | "Close enough" é o julgamento do usuário, não seu. Pergunte em **Step 2.5** ANTES de substituir. Step 5 provenance documenta substituições autorizadas; não autoriza retroativamente as suas. |
+| "`blocks-reference.md` lista esse `MODEL_ID`, então posso chamar `add_block`" | O doc lista o que o projeto SABE carregar. `openrig://plugins` lista o que ESTA rig tem carregado. Os dois divergem — sempre cheque o segundo na **Step 2.5**. |
+| "O usuário pediu o preset, fetchar capture é fora de escopo da tone-builder" | Fora de escopo seria dispatch direto; a Step 2.5 só OFERECE o fetch como (a) e delega à `openrig-tone3000-fetch` quando o user aceita. Não oferecer = decidir pelo (b) escondido. |
+| "Vou deixar o `add_block` falhar e aí rodo Step 2.5 quando descobrir o erro" | Wrong order. 2.5 é **precondition** pra Step 3, não recovery. O error path polui o log, deixa estado parcial na chain e contorna a pergunta (a)/(b). Leia `openrig://plugins` PRIMEIRO. |
+| "Os blocos stock (`compressor_*`, `gate_basic`, `limiter_brickwall`) são built-in, óbvio que estão instalados — checo só os NAM/IR" | A Step 2.5 diz **for every `MODEL_ID`**. Stock pode estar desabilitado em builds custom, renomeado entre versões, ou ausente em forks. O custo do cross-check é uma leitura de resource — não vale a pena economizar. |
 
 ## Workflow (file-only path)
 
@@ -468,6 +545,22 @@ If the user picked the file-only path in Step −1:
 
 1. Do **steps 1, 2** of the MCP workflow (research + map gear). Skip
    the MCP precondition.
+1b. **Installedness on the file-only path.** If the OpenRig MCP server
+   happens to be reachable in this session anyway (rig running with
+   `--mcp`, just not the persistence path the user picked), run
+   **Step 2.5** to flag missing captures — the user can still opt to
+   import via `openrig:openrig-tone3000-fetch` BEFORE you write the
+   YAML, so the eventual `Load Preset` doesn't fail to resolve a
+   capture. If MCP is offline, you **cannot verify installedness from
+   here** — list **every** `MODEL_ID` your plan uses (not only the
+   exotic NAM/IR ones — also `compressor_studio_clean`, `gate_basic`,
+   `eq_eight_band_parametric`, `limiter_brickwall`, etc.) in your chat
+   reply, label the list explicitly as **"unverified — your rig may
+   not have all of these"**, and recommend the user run
+   `openrig:openrig-tone3000-fetch` against any captures they don't
+   have locally before they load the YAML in OpenRig. Do NOT silently
+   trust the plan; the user is your installedness oracle when MCP
+   is offline.
 2. Determine the YAML output path:
    `~/.openrig/presets/<Song> — <Artist> (<role>).yaml` (the OS path
    varies — macOS uses `~/Library/Application Support/OpenRig/presets`
