@@ -38,6 +38,42 @@ existing active preset). See Step 3.
 exists.** Overwriting tone work the user spent time on is the worst-case
 failure mode for this skill. See Step 0 of the workflow.
 
+## ⛔ HARD GATE — render+compare BEFORE declaring done (read this first)
+
+The render→compare loop in **Step 6 is MANDATORY** when the user
+provides any reference audio (an isolated guitar stem, a WAV of the
+song, anything). It is **not** a closing nicety; it is the only
+objective signal this skill produces. **Saving a preset without
+rendering+comparing is saving a guess** — exactly the failure mode that
+produced the Clocks v1 the user threw away.
+
+You may NOT declare the preset done — and you SHOULD NOT call
+`save_chain_preset` as the "final" save — until you have:
+
+1. **Confirmed the bundled DI exists** at
+   `<openrig-source-root>/assets/audio/input.wav` (mono 48 kHz, the
+   canonical reamp DI; ships with the OpenRig repo). You do **not** ask
+   the user for a DI — only the *wet* reference comes from them.
+2. **Rendered** the DI through the just-built preset via the
+   `openrig render` CLI.
+3. **Compared** the rendered output to the user's reference stem with
+   `openrig-tone-analyzer/scripts/compare.py`, read `diff.json`,
+   applied **one** recommendation, re-rendered, re-compared.
+4. **Iterated** until `diff.converged` is true OR `match_score`
+   plateaus across two consecutive iterations — at which point you
+   report the gap and the score to the user, not "done".
+
+If the user explicitly says they have no reference, declare that
+**out loud in the chat** before Step 8 (`save_chain_preset`) — "no
+reference stem provided, this preset is a research-only guess; I
+cannot validate it" — so the user can decide whether to provide one
+or accept the limitation. Silent skipping = failure of the skill.
+
+The DI path is `<openrig-source-root>/assets/audio/input.wav`. Not
+`assets/sound/`, not `~/Music/`, not a fresh user-supplied DI. This
+one file. If it is missing from the OpenRig repo, that is a bug in
+the repo — stop and tell the user, do not improvise.
+
 ## Step −1 — Ask the user: MCP live or YAML file only?
 
 Before touching anything, ask **once** which persistence path the user
@@ -103,62 +139,6 @@ If only `<artist>` is given, ask once for the song and role. Era-less,
 role-less presets drift toward generic and the user notices.
 
 ## Workflow (MCP path)
-
-### 0. Check for a pre-existing preset for this song
-
-The worst-case failure mode for this skill is silently overwriting a
-preset the user spent time tuning. Run this check **before any other
-MCP call**.
-
-1. Decide which chain the preset belongs to (electric guitar / bass /
-   acoustic). If multiple chains in the project match the instrument
-   and the user did not name one in the prompt, ask once which chain
-   to write into; never pick by yourself when more than one would fit.
-
-2. Read the chain's bank:
-
-   ```
-   ReadMcpResourceTool {
-     server: "plugin_openrig_openrig",
-     uri: "openrig://chains/<chain-id>/presets"
-   }
-   ```
-
-   The response is JSON: `{ active_preset, slots: [{ index, name, key }, ...] }`.
-   The slot's display name lives in `name` (set via `rename_rig_preset`);
-   the bank's stable identifier lives in `key` (auto-generated, ignore
-   for matching).
-
-3. Construct the canonical preset name for this build:
-   `"<Song> — <Artist> (<role>)"` (em dash, single space; `<role>` is
-   `rhythm` / `lead` / `solo` / `clean` / `intro`, etc.). Examples:
-   `"Enter Sandman — Metallica (rhythm)"`, `"Clocks — Coldplay (lead)"`.
-
-4. Compare case-insensitively against every `name` in `slots[]`. A
-   match means the user already built (or started) this preset.
-
-5. **If there is a match**, do not touch the rig. Ask the user via
-   `AskUserQuestion` which of the following to do:
-
-   - **Overwrite** that slot (the skill will `apply_rig_nav` to
-     activate it, then drop and re-add its FX blocks — destructive to
-     the existing tone in that slot only).
-   - **Save under a new name** (suggest a suffixed variant such as
-     `"<Song> — <Artist> (<role>, v2)"` or
-     `"<Song> — <Artist> (<role>, takeN)"`); a brand-new slot will be
-     added.
-   - **Cancel** and stop the skill (the existing preset stays exactly
-     as it is).
-
-   Wait for the answer. Do not infer from silence.
-
-6. **If there is no match**, you will add a new slot in Step 3. Carry
-   the canonical name forward for Steps 7 (`rename_rig_preset`) and 8
-   (`save_chain_preset`).
-
-7. Document in your provenance reply (Step 5) whether you created a
-   new slot or overwrote an existing one — the user reading the diff
-   later needs to know.
 
 ### 1. Research the signal chain
 
@@ -323,10 +303,14 @@ After `save_chain_preset` succeeds, summarize:
 4. **Note uncertainty** (substitutions, missing captures).
 5. **Tunings** mentioned as a playing hint, optionally in the preset name.
 
-### 6. Render and A/B compare (validation loop)
+### 6. Render and A/B compare (MANDATORY validation loop — runs BEFORE you report "done")
 
-If the user provided a reference WAV (isolated guitar stem), close the
-feedback loop instead of stopping at "saved":
+> ⛔ **This is the hard gate from the top of the file.** If the user
+> provided a reference WAV — or if you can reasonably infer they expect
+> the preset to match a real recording — this loop is NOT optional and
+> NOT post-hoc. Without it, your preset is a research-grade guess and
+> the user has no way to tell. Run it BEFORE declaring done; iterate
+> until convergence; only then report.
 
 1. Render the **canonical bundled DI** through the just-saved preset
    via `openrig-render` (headless DSP renderer): `openrig render
@@ -389,6 +373,16 @@ measured match. Flag this in the chat reply so the user knows.
   `save_chain_preset`).
 - Writing a YAML preset file to disk *without* the user having picked
   the file-only path in Step −1.
+- Reporting "preset salvo" / "preset saved" / "done" to the user
+  WITHOUT having run at least one render→compare cycle when any
+  reference audio exists. **This is the failure mode the user called
+  out explicitly**: "ta faltando a coisa mais importante. vc deveria
+  rodar o render". If you reach `save_chain_preset` and have not yet
+  rendered, you have NOT validated the preset — you have saved a
+  guess. Restart from Step 6.
+- Asking the user for a DI WAV file. **You don't.** The DI is bundled
+  at `<openrig-source-root>/assets/audio/input.wav`. Only the *wet
+  reference stem* comes from the user.
 
 ## Common rationalizations -- forbidden
 
@@ -402,6 +396,10 @@ measured match. Flag this in the chat reply so the user knows.
 | "The user's `tuner_chromatic` mention means I should add it as a block" | Tuner is a rig-wide utility; it has its own enable command. The preset doesn't own it. |
 | "The mix's centroid says the guitar is dark, so I'll EQ-darken" | The mix's centroid is dominated by bass/drums/keys. Look at an isolated stem before darkening — or you will produce a muddy preset (real Clocks rebuild failed for exactly this reason). |
 | "I built it from research, no need to render+compare" | Research = educated guess. The render+compare loop is the only objective signal. If the user has a stem, run it. |
+| "I'll render+compare AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → compare → adjust → save → render → compare → ... until convergence. Reporting "done" after the FIRST save is reporting on a guess. |
+| "The previous version of this preset worked without rendering, so I can skip this time" | Whoever told you that lied. **Every preset built without render+compare in this skill's history has been thrown away by the user.** Clocks v1 is the canonical example. No exceptions. |
+| "There's no `openrig render` available, I'll skip" | If `openrig render` is genuinely missing from PATH, STOP and tell the user — do not silently skip the gate. The CLI ships with OpenRig; check `which openrig` and `openrig --help` for the `render` subcommand. |
+| "The user didn't give me a DI, I can't render" | The user **never** gives you a DI. The canonical DI ships at `<openrig-source-root>/assets/audio/input.wav`. Reading the skill for the path is on you. |
 
 ## Workflow (file-only path)
 
