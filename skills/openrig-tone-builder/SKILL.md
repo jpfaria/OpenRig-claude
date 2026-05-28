@@ -113,27 +113,38 @@ directory** so it survives a `/tmp/` wipe, a reboot, a machine
 migration, or simply "let me re-validate this preset next month
 against the same reference".
 
-### `<openrig-user-data-root>` — resolve per OS, once, at the top of Step 0a
+### Resolve the evaluations directory via MCP, once, at the top of Step 0a
 
-`<openrig-user-data-root>` resolves per OS — match the same convention OpenRig itself uses (`dirs::config_dir()` + `/OpenRig`):
+Read the OpenRig MCP resource `openrig://paths` (added in #582). It
+returns the user's effective resolved system paths as JSON:
 
-  - **macOS**: `~/Library/Application Support/OpenRig/`
-  - **Linux**: `${XDG_CONFIG_HOME:-~/.config}/OpenRig/`
-  - **Windows**: `%APPDATA%\OpenRig\`
+```jsonc
+{
+  "data_root": "/Users/.../Library/Application Support/OpenRig",
+  "presets_path": "/Users/.../presets",
+  "plugins_path": "/Users/.../plugins",
+  "evaluations_path": "/Users/.../evaluations"
+}
+```
 
-Detect the OS once at the start of Step 0a and use the resolved path everywhere below. Do NOT hardcode `~/.openrig/` — that path only works on a legacy macOS dev install where the user happens to have a project root at that location; on a fresh install or any non-macOS box it doesn't exist.
-
-> **Future:** when the OpenRig MCP server exposes an `openrig://paths` resource (issue follow-up ao #572), this per-OS resolution will be replaced by a read of that resource — análoga ao que `openrig://plugins/{id}/params` fez pra schema. Até lá, a tabela per-OS acima é a fonte autoritativa.
+Use `evaluations_path` as the root for every artifact this skill
+writes — that field already honours the user's override from
+`Settings → System → Paths` (or the OS default when no override is
+set). Treat it as `<openrig-evaluations-root>` everywhere below. Do
+NOT hardcode any per-OS path here; `openrig://paths` is the single
+source of truth.
 
 `/tmp/openrig-analyzer/<ts>/` and `/tmp/openrig-render/` are volatile
 working directories used by the underlying analyzer and render
-binaries — they are NOT the home of the evaluation. Treat them as
-scratch and copy results out. Saving a preset to
-`<openrig-user-data-root>/presets/<name>.yaml` while the matching fingerprint, ref
-WAV, render, and diff sit in `/tmp/` is an evaluation with no context
-— there's no way to re-compare an old preset version, to see score
-evolution across iterations, or to A/B a tweak against the same
-historic reference.
+binaries — they are NOT the home of the evaluation. Pass
+`--out-dir <openrig-evaluations-root>/<song-slug>/` when invoking
+them so outputs land where they belong from the start; never let
+results sit in `/tmp/` after the call returns. Saving a preset to
+`<openrig-user-data-root>/presets/<name>.yaml` while the matching
+fingerprint, ref WAV, render, and diff sit in `/tmp/` is an
+evaluation with no context — there's no way to re-compare an old
+preset version, to see score evolution across iterations, or to A/B
+a tweak against the same historic reference.
 
 ### Compute the `<song-slug>` and create the directory
 
@@ -149,13 +160,13 @@ multiple roles into one build):
 The result is a kebab-case filesystem-safe slug. Keep it stable across
 re-builds of the same song — the slug is the directory key.
 
-Create (or reuse) `<openrig-user-data-root>/evaluations/<song-slug>/` with this
+Create (or reuse) `<openrig-evaluations-root>/<song-slug>/` with this
 structure (placeholders only — substitute the actual `<song-slug>`,
 `<role>`, and iteration number `<N>` at build time, never echo a
 literal song/artist from this skill text):
 
 ```text
-<openrig-user-data-root>/evaluations/<song-slug>/
+<openrig-evaluations-root>/<song-slug>/
 ├── eval.md                       # human-readable iteration log
 ├── refs/
 │   ├── <role>.wav                # copy of user's reference WAV (sha256 verified)
@@ -176,7 +187,7 @@ literal song/artist from this skill text):
 
 ### Reuse vs first-build
 
-- **If `<openrig-user-data-root>/evaluations/<song-slug>/` already exists**, READ
+- **If `<openrig-evaluations-root>/<song-slug>/` already exists**, READ
   `eval.md` before doing anything else. It tells you: prior iteration
   count, last `match_score`, prior status (`done` / `iterating` /
   `abandoned`), the gear mapping that was used, and any methodology
@@ -202,7 +213,7 @@ For every reference WAV the user provided:
 
 1. Compute the source file's sha256.
 2. `cp` (do NOT `ln -s`) it to
-   `<openrig-user-data-root>/evaluations/<song-slug>/refs/<role>.wav`. Symlinks
+   `<openrig-evaluations-root>/<song-slug>/refs/<role>.wav`. Symlinks
    break under `/tmp/` cleanup, external-drive unplug, and machine
    migration — the entire point of this directory is portability.
 3. Re-compute the destination sha256 and verify it matches the source.
@@ -259,7 +270,7 @@ Update `Status:` to `done` when the user accepts the preset, or
 `abandoned` if the user walks away. Leave at `iterating` between
 iterations.
 
-### Optional: `<openrig-user-data-root>/evaluations/INDEX.md`
+### Optional: `<openrig-evaluations-root>/INDEX.md`
 
 If a global index doesn't exist, create one on first add. Append a
 row whenever you finish (or re-evaluate) an evaluation. Columns:
@@ -300,7 +311,7 @@ How:
 4. **Persist each fingerprint into the per-song evaluation directory.**
    After the analyzer skill writes its JSON to its scratch dir (today
    `/tmp/openrig-analyzer/<unix_ts>/`), `cp` the JSON to
-   `<openrig-user-data-root>/evaluations/<song-slug>/fingerprints/ref-<role>.json`.
+   `<openrig-evaluations-root>/<song-slug>/fingerprints/ref-<role>.json`.
    The scratch path is volatile; the persistent copy is what every
    later iteration (and any future re-evaluation per Step 8) compares
    against. If `ref-<role>.json` already exists from a prior build,
@@ -685,7 +696,7 @@ two surfaces:
 4. Update `**Date:**` only on first build; subsequent iterations leave
    it alone so the original build date is preserved (use a per-row
    timestamp in the iteration log if dates matter per iter).
-5. If a global `<openrig-user-data-root>/evaluations/INDEX.md` exists (Step 0a
+5. If a global `<openrig-evaluations-root>/INDEX.md` exists (Step 0a
    optional), update the row for this `<song-slug>` with the latest
    `match_score`, date, and status. If it doesn't exist, optionally
    create one.
@@ -704,7 +715,7 @@ two surfaces:
    OK in Step 2.5). Silent substitutions are forbidden — see Red Flags.
 5. **Tunings** mentioned as a playing hint, optionally in the preset name.
 6. **Point at the persistent evaluation dir**: tell the user
-   `<openrig-user-data-root>/evaluations/<song-slug>/` holds the full audit trail
+   `<openrig-evaluations-root>/<song-slug>/` holds the full audit trail
    (refs, fingerprints, renders, diffs, per-iteration preset
    snapshots, `eval.md`) — so they know where to find it for re-eval,
    backup, or sharing.
@@ -724,7 +735,7 @@ two surfaces:
    `/tmp/openrig-render/`:
    `openrig render --preset "<Song> — <Artist> (<role>)" --input
    <openrig-source-root>/assets/audio/input.wav --output
-   <openrig-user-data-root>/evaluations/<song-slug>/renders/<role>-v<N>.wav`. `<N>`
+   <openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav`. `<N>`
    is the current iteration index — start at `1` for a fresh build,
    continue from `last_existing_N + 1` when reusing an existing
    `<song-slug>/` directory (see Step 0a "Reuse vs first-build"). The
@@ -734,9 +745,9 @@ two surfaces:
    stem comes from them.
 2. Compare the rendered output against the **persistent** reference
    stem with `openrig-tone-analyzer` in compare mode: `.venv/bin/python
-   scripts/compare.py <openrig-user-data-root>/evaluations/<song-slug>/refs/<role>.wav
-   <openrig-user-data-root>/evaluations/<song-slug>/renders/<role>-v<N>.wav --output
-   <openrig-user-data-root>/evaluations/<song-slug>/diffs/<role>-v<N>.json`. Always
+   scripts/compare.py <openrig-evaluations-root>/<song-slug>/refs/<role>.wav
+   <openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav --output
+   <openrig-evaluations-root>/<song-slug>/diffs/<role>-v<N>.json`. Always
    pass the ref from `refs/<role>.wav` (copied in Step 0a), never the
    user's original path — the persistent copy is what every iteration
    compares against so scores stay comparable across re-builds. If
@@ -756,7 +767,7 @@ two surfaces:
 5. **After every `save_chain_preset` in this loop**, snapshot the just-saved
    preset YAML into the evaluation directory:
    `cp <openrig-user-data-root>/presets/"<Song> — <Artist> (<role>)".yaml
-   <openrig-user-data-root>/evaluations/<song-slug>/presets/<role>-v<N>.yaml`
+   <openrig-evaluations-root>/<song-slug>/presets/<role>-v<N>.yaml`
    (use the OS-appropriate `presets_path` if not the default). The
    snapshot is the only way to re-render a historic iteration — the
    live YAML at `<openrig-user-data-root>/presets/` only carries the latest version
@@ -785,7 +796,7 @@ Preconditions:
    file-only workflow has no way to produce a fresh render. If the
    user asks for re-eval on the file-only path, tell them to start
    OpenRig with `--mcp` and offer to switch.
-2. `<openrig-user-data-root>/evaluations/<song-slug>/refs/<role>.wav` exists —
+2. `<openrig-evaluations-root>/<song-slug>/refs/<role>.wav` exists —
    otherwise there's nothing to compare against. If missing, this
    evaluation predates Step 0a; ask the user for the original ref WAV
    and run Step 0a + Step 0 first to backfill.
@@ -803,7 +814,7 @@ Flow:
 2. **Render the current preset YAML through the bundled DI**:
    `openrig render --chain <preset-path> --input
    <openrig-source-root>/assets/audio/input.wav --output
-   <openrig-user-data-root>/evaluations/<song-slug>/renders/<role>-vREEVAL-<YYYY-MM-DD>.wav`.
+   <openrig-evaluations-root>/<song-slug>/renders/<role>-vREEVAL-<YYYY-MM-DD>.wav`.
    Use `--chain <yaml-path>` (or whatever the equivalent
    load-from-file flag is) to render the YAML directly without
    needing to push it into a slot. The DI path stays the canonical
@@ -811,10 +822,10 @@ Flow:
    — same as Step 6, same dynamic-range guarantees.
 3. **Compare against the persistent reference**:
    `.venv/bin/python scripts/compare.py
-   <openrig-user-data-root>/evaluations/<song-slug>/refs/<role>.wav
-   <openrig-user-data-root>/evaluations/<song-slug>/renders/<role>-vREEVAL-<YYYY-MM-DD>.wav
+   <openrig-evaluations-root>/<song-slug>/refs/<role>.wav
+   <openrig-evaluations-root>/<song-slug>/renders/<role>-vREEVAL-<YYYY-MM-DD>.wav
    --output
-   <openrig-user-data-root>/evaluations/<song-slug>/diffs/<role>-vREEVAL-<YYYY-MM-DD>.json`.
+   <openrig-evaluations-root>/<song-slug>/diffs/<role>-vREEVAL-<YYYY-MM-DD>.json`.
    Same compare.py the iteration loop uses; same caveat about
    `--output` fallback to stdout-capture.
 4. **Append a re-eval row to `eval.md`**: under the matching
@@ -887,7 +898,7 @@ read-render-compare over persistent artifacts.
       build output.
 - [ ] You computed `<song-slug>` deterministically (lowercase,
       accent-stripped, kebab-case) and created
-      `<openrig-user-data-root>/evaluations/<song-slug>/` with the full subtree
+      `<openrig-evaluations-root>/<song-slug>/` with the full subtree
       (`refs/`, `fingerprints/`, `renders/`, `diffs/`, `presets/`,
       `eval.md`) per **Step 0a**.
 - [ ] Every user-provided reference WAV was `cp`'d (NOT symlinked)
@@ -896,7 +907,7 @@ read-render-compare over persistent artifacts.
       `fingerprints/ref-<role>.json` — not left only in
       `/tmp/openrig-analyzer/<ts>/`.
 - [ ] The render command's `--output` pointed at
-      `<openrig-user-data-root>/evaluations/<song-slug>/renders/<role>-v<N>.wav`
+      `<openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav`
       — not at `/tmp/openrig-render/`.
 - [ ] Every `compare.py` invocation read the ref from
       `refs/<role>.wav` and wrote `diff.json` to
@@ -973,18 +984,18 @@ read-render-compare over persistent artifacts.
   Step 0a, use everywhere. Hardcoding the legacy macOS path silently
   breaks every non-macOS user (Linux and Windows) AND breaks any macOS
   user on a fresh install who never had a `~/.openrig/` project root.
-- Building a preset without creating `<openrig-user-data-root>/evaluations/<song-slug>/`
+- Building a preset without creating `<openrig-evaluations-root>/<song-slug>/`
   per **Step 0a**. The persistent dir is the audit trail, the re-eval
   source, the portable backup. Skipping it ships the user a guess
   with no way to verify it later.
 - Leaving renders or diffs in `/tmp/openrig-render/` or
   `/tmp/openrig-analyzer/<ts>/` and "planning to copy them at the
   end". `/tmp/` gets wiped, the agent forgets, the evidence is gone.
-  Write directly to `<openrig-user-data-root>/evaluations/<song-slug>/renders/` and
+  Write directly to `<openrig-evaluations-root>/<song-slug>/renders/` and
   `…/diffs/` from the first iteration.
 - Passing the user's original `/Users/.../refs/rhythm.wav` path to
   `compare.py` instead of the persistent copy in
-  `<openrig-user-data-root>/evaluations/<song-slug>/refs/<role>.wav`. The original
+  `<openrig-evaluations-root>/<song-slug>/refs/<role>.wav`. The original
   path can move, get deleted, or be on an unmounted drive — and the
   persistent copy is what every later iteration / re-eval is
   benchmarked against, so all scores must trace to the same file.
@@ -1037,11 +1048,11 @@ read-render-compare over persistent artifacts.
 | "A rig não tem chain pro instrumento dessa música, vou parar e pedir pro user criar na GUI" | Antigo comportamento. Agora: na Step 3.1, ofereça a opção `(N+1) criar chain nova`, pergunte nome + instrument, e chame `add_chain` quando o user aceitar. Parar e empurrar pra GUI só se o user explicitamente recusar criar pela skill. |
 | "Step 0a é bookkeeping, o usuário quer o timbre, não uma estrutura de pastas" | Step 0a É parte de entregar o timbre. Sem `<song-slug>/`, a próxima vez que o user pedir pra re-validar contra a mesma ref, você não consegue (Step 8 fica impossível). Bookkeeping é o que torna "o timbre" auditável, portável, e re-comparável — pular = entregar um chute sem evidência. |
 | "Estou num Mac, posso usar `~/.openrig/` direto — é mais curto" | Não. A skill é publicada para todos OS. `~/.openrig/` no Mac é caminho legacy de um project root dev — não é o user-data root. Use `<openrig-user-data-root>` resolvido per OS (macOS → `~/Library/Application Support/OpenRig/`, Linux → `${XDG_CONFIG_HOME:-~/.config}/OpenRig/`, Windows → `%APPDATA%\OpenRig\`). Curto não vale silently quebrar Linux/Windows users. |
-| "Vou renderizar pra `/tmp/` que é mais rápido e copio pra `evaluations/` no final" | Hole na sua memória de curto prazo = perder a evidência. `/tmp/` é wipável. "No final" frequentemente não acontece (timeout, erro, interrupção). Escreva DIRETO em `<openrig-user-data-root>/evaluations/<song-slug>/renders/<role>-v<N>.wav` desde a primeira iteração — não há atalho que valha o risco de evidência perdida. |
+| "Vou renderizar pra `/tmp/` que é mais rápido e copio pra `evaluations/` no final" | Hole na sua memória de curto prazo = perder a evidência. `/tmp/` é wipável. "No final" frequentemente não acontece (timeout, erro, interrupção). Escreva DIRETO em `<openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav` desde a primeira iteração — não há atalho que valha o risco de evidência perdida. |
 | "Passar o path original do ref pro `compare.py` é o mesmo que passar a cópia em `refs/`" | Não. O path original pode mover, ser deletado, ou estar num drive desmontado quando o user pedir re-eval. A cópia em `refs/<role>.wav` é imutável (sha256-verificada) e é o que TODAS as iterações + Step 8 comparam — todos os scores precisam tracear pra ela. Sempre use o path persistente. |
-| "Symlink em vez de `cp` pro `refs/` economiza disco" | Economiza disco, quebra portabilidade. `tar czf backup.tgz <openrig-user-data-root>/evaluations/` precisa funcionar e produzir um arquivo auto-contido. Symlink quebra na hora do `tar` (vira link relativo) ou na hora do extract em outra máquina. Sempre `cp`. |
+| "Symlink em vez de `cp` pro `refs/` economiza disco" | Economiza disco, quebra portabilidade. `tar czf backup.tgz <openrig-evaluations-root>/` precisa funcionar e produzir um arquivo auto-contido. Symlink quebra na hora do `tar` (vira link relativo) ou na hora do extract em outra máquina. Sempre `cp`. |
 | "Vou updatar `eval.md` só no final, com todas as iterações de uma vez" | Não. As linhas interim são a evolução do score — sem elas você não consegue mostrar pro user por que a v4 ganhou da v2. Append linha por iteração, no final do Step 5 de cada loop. |
-| "Já existe `<openrig-user-data-root>/evaluations/<song-slug>/` de um build anterior — vou `rm -rf` pra começar limpo" | Não. Isso apaga a auditoria do user. Leia `eval.md`, continue a numeração de iteração depois do último `<role>-v<N>`, e mantenha os YAMLs antigos como histórico. Só apague se o user explicitamente pedir. |
+| "Já existe `<openrig-evaluations-root>/<song-slug>/` de um build anterior — vou `rm -rf` pra começar limpo" | Não. Isso apaga a auditoria do user. Leia `eval.md`, continue a numeração de iteração depois do último `<role>-v<N>`, e mantenha os YAMLs antigos como histórico. Só apague se o user explicitamente pedir. |
 | "Os placeholders `<Song>` `<Artist>` `<chain id>` no template do `eval.md` são literais — escrevo como estão" | Não. Placeholders na SKILL.md são marcadores de slot — você substitui pelos valores reais do build (título da música real, artista real, chain id real lido de `openrig://project`). Se o `eval.md` final na pasta do user contém literalmente `<Song>` ou `<Artist>`, você não fez o build, você ecoou o template. |
 
 ## Workflow (file-only path)
@@ -1092,7 +1103,7 @@ If the user picked the file-only path in Step −1:
 6. **Persistent evaluation dir on this path.** Step 0a still applies:
    resolve `<openrig-user-data-root>` for your OS (same per-OS table
    as Step 0a), compute `<song-slug>`, create
-   `<openrig-user-data-root>/evaluations/<song-slug>/`, `cp` the ref WAVs into
+   `<openrig-evaluations-root>/<song-slug>/`, `cp` the ref WAVs into
    `refs/<role>.wav` with sha256 verification, persist the
    fingerprints into `fingerprints/ref-<role>.json`, and snapshot the
    YAML you write in step 3 into `presets/<role>-v1.yaml` (and

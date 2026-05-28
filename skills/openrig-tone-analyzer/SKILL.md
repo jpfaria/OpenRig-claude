@@ -63,12 +63,21 @@ hash so it knows when to reinstall.
    - 2 files → **compare** (first = reference, second = wet/rendered).
 2. **Run it:**
    ```bash
-   .venv/bin/python scripts/analyze.py <input.wav>
+   .venv/bin/python scripts/analyze.py <input.wav> [--out-dir DIR]
    # or
-   .venv/bin/python scripts/compare.py <ref.wav> <wet.wav> [--ref-section IDX] [--wet-section IDX]
+   .venv/bin/python scripts/compare.py <ref.wav> <wet.wav> [--out-dir DIR] [--ref-section IDX] [--wet-section IDX]
    ```
-   The script prints the resolved out-dir on its last line; default is
-   `/tmp/openrig-analyzer/<unix_ts>/`.
+   The script prints the resolved out-dir on its last line.
+
+   **Pick `--out-dir` from MCP, not from `/tmp`.** OpenRig #582 exposes
+   the user's evaluations directory via the `openrig://paths` resource
+   (`evaluations_path` field — already an absolute, OS-correct path).
+   The ORCHESTRATOR (`openrig-tone-builder`) reads it via MCP and
+   passes it down to this script as `--out-dir <evaluations_path>/<ts>/`,
+   keeping this analyzer's iron rule 1 intact (no MCP calls from
+   here). When no caller passes `--out-dir`, the script falls back to
+   `/tmp/openrig-analyzer/<unix_ts>/` so a one-shot manual run still
+   works.
 
    `--wet-section` accepts an int index (pin a specific wet section) or the
    literal `auto` (opt into the smarter auto-pick that skips silent background
