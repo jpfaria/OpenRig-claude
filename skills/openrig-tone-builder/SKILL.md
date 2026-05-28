@@ -13,9 +13,12 @@ touching anything** — see Step −1.
 
 ## Chain vs preset vs slot — read this before anything else
 
-**A chain is a slot/group in the rig** (e.g. "Electric Guitar",
-"Acoustic", "Bass"). Owns the I/O wiring and an instrument tag. **The
-user creates chains.** This skill never calls `add_chain`.
+**A chain is a top-level group in the rig** (e.g. "Electric Guitar",
+"Acoustic", "Bass"). Owns the I/O wiring and an instrument tag.
+**Where this preset lives — which chain, or a brand-new one — is
+always the user's call** (see **Step 3.1**). This skill may call
+`add_chain` when the user explicitly opts in; it never picks or
+creates a chain on its own.
 
 **A chain has a BANK of preset slots.** Each slot holds one named preset
 (the FX layout for one tone). Slots are referenced by index, the preset's
@@ -338,14 +341,29 @@ Steps:
    different name (e.g. append ` (v2)` / the date), or **show plan
    only**. Never overwrite without confirmation.
 
-1. **Read `openrig://project` and pick the chain.** List every chain
-   with its `instrument` field and current `blocks`. Pick the chain
-   whose `instrument` matches the song (`electric_guitar`,
-   `acoustic_guitar`, `bass_guitar`). When several match, prefer the
-   one **without** acoustic-specific blocks (body IR) for an electric
-   song, **with** them for an acoustic song. Still ambiguous → ask
-   the user once. **If no chain matches, STOP** — the user adds the
-   chain in the GUI; you do NOT call `add_chain`.
+1. **Read `openrig://project` and ALWAYS ask the user where to put this preset.** List every chain in the project with its id, display name, `instrument`, and a short summary of its current blocks. Build a numbered menu — **including when only one chain matches the song's instrument** — and add a final "criar chain nova" option. Do NOT auto-pick. The shape (replace with real chains from the project read; do NOT echo example chain names from this skill text):
+
+   > "Onde quer colocar o preset?
+   > **(1)** chain `<id>` ('<display name>', instrument `<x>`, blocos atuais: `<short summary>`)
+   > **(2)** chain `<id>` ('<display name>', instrument `<y>`, ...)
+   > ...
+   > **(N+1) criar chain nova** — eu pergunto nome + instrumento e chamo `add_chain`."
+
+   You MAY recommend one option in the ask message (e.g. "sugiro **(1)** porque o `instrument` bate com o estilo da música"), but you **MUST wait for the user's explicit pick**. Auto-selecting because "só uma chain bate com o instrumento" is forbidden — that is the deterministic "marreta" behaviour this step exists to prevent.
+
+   **If the user picks `(N+1) criar chain nova`**, sub-flow:
+   - Ask the user the **chain name** (free text, e.g. "Lead Solos", "Rhythm — Drop D", "Clean Acoustic") **AND** the **`instrument`** tag (`electric_guitar` / `acoustic_guitar` / `bass_guitar` / etc.) in the same ask, OR one after the other if you must.
+   - If the user answers only one of the two (e.g. name but not instrument), **re-ask the missing one explicitly**. Never infer the instrument from the song or from the chain name. The user picked "criar chain nova" and must answer both prompts; checklist requires it.
+   - Call `add_chain { name, instrument, ... }` and capture the returned chain id. If `add_chain` errors (duplicate name, invalid instrument, etc.), **STOP and surface the exact error to the user** — do not retry with a mutated name, do not silently switch to one of the existing chains. Ask the user to either correct the input or pick a different option from the menu.
+   - Once you have the new chain id, continue the preset build into it.
+
+   **If `openrig://project` returns ZERO chains**, you may go straight to the create-new sub-flow (still asking name + instrument), but say out loud "sua rig não tem chains ainda — vou criar uma" so the user knows. Don't render an empty menu.
+
+   **If `openrig://project` returns exactly ONE chain**, you still render the menu (option 1 = that chain, option 2 = criar nova). The "menu always" rule has no carve-out for project size.
+
+   **If the user does not answer**, ask once more or stop. Never decide for them.
+
+   **Forbidden short-form ask:** rendering a single-line "use `<chain>`? (y/n)" instead of the full numbered menu is the same anti-pattern as auto-picking — it pre-selects the option you wanted and hides the alternatives (other chains + criar nova). Always render the full menu; the "y/n shortcut" is forbidden even when only one chain matches the instrument.
 
 2. **Decide the preset name** as
    `"<Song> — <Artist> (<role>)"` (e.g. `"Clocks — Coldplay (rhythm)"`,
@@ -469,9 +487,10 @@ recreate the staleness problem the MCP schema source exists to solve.
 
 After `save_chain_preset` succeeds, summarize:
 
-1. **Chain + slot + preset name**: which chain, which slot index, and
-   the preset name (e.g. `"Clocks — Coldplay (rhythm)" added to slot 5
-   of chain "gUItARRA - SETLIST"`).
+1. **Chain + slot + preset name**: which chain (display name + id),
+   which slot index, and the preset name. Use the **actual** values
+   from the rig the user is working with — do NOT echo any example
+   chain or preset name from this skill's text.
 2. **Mapping table**: real gear → OpenRig model. Mark fallbacks explicitly.
 3. **Cite sources** you actually fetched.
 4. **Note uncertainty** explicitly. For any substitution that came out
@@ -540,7 +559,13 @@ measured match. Flag this in the chat reply so the user knows.
       `select_..._option`), not by guessing from the param's name.
 - [ ] For any block whose schema returned `parameters: []`, no
       `set_block_parameter_*` was called on it.
-- [ ] You did NOT call `add_chain` (this skill never does).
+- [ ] If you called `add_chain`, it was BECAUSE the user explicitly
+      picked the "criar chain nova" option in Step 3.1 and answered
+      both the name and instrument prompts. You did NOT call
+      `add_chain` for any other reason.
+- [ ] You did NOT auto-pick a chain in Step 3.1 just because its
+      `instrument` matched. You rendered the menu and waited for the
+      user's explicit pick, even when only one chain matched.
 - [ ] You did NOT call `save_project` (the preset is the unit of work).
 - [ ] You did NOT add `tuner_chromatic` or `spectrum_analyzer` via
       `add_block` (they are rig-wide commands, not chain blocks).
@@ -642,6 +667,9 @@ measured match. Flag this in the chat reply so the user knows.
 | "Vou inferir o tool (`_number` vs `_bool`) pelo nome do param" | O `domain` da schema decide, não o nome. Mesmo param chamado `bias` pode ser `FloatRange` (knob) num plugin e `Bool` (switch) noutro. Leia `domain`. |
 | "Vou cachear o schema dessa família de amp e reusar pros similares" | Cada `MODEL_ID` tem schema próprio. Cache UM read por MODEL_ID por build — não compartilha entre famílias. Custo é mínimo (uma leitura de resource), benefício é zero erros de path. |
 | "O `domain.Enum` me dá `value` E `label`; vou passar o `label` que é mais legível" | Não. O `select_block_parameter_option` recebe o `value`. Passar o `label` falha. |
+| "Só uma chain bate com o `instrument` da música, vou direto pra ela sem perguntar" | Step 3.1 sempre renderiza o menu, inclusive quando só uma chain bate. Você PODE sugerir a opção óbvia na mensagem, mas espera o pick do usuário. "Conveniência" = decidir pelo usuário = exatamente a marreta que o user reportou. |
+| "Vou só usar `<gUItARRA - SETLIST>` / `<Clocks — Coldplay>` que é o exemplo padrão da skill" | Os nomes nos exemplos do texto da skill são ilustrações de FORMATO, não chains ou presets reais da sua rig. Leia `openrig://project` e use os valores reais que vêm de lá. |
+| "A rig não tem chain pro instrumento dessa música, vou parar e pedir pro user criar na GUI" | Antigo comportamento. Agora: na Step 3.1, ofereça a opção `(N+1) criar chain nova`, pergunte nome + instrument, e chame `add_chain` quando o user aceitar. Parar e empurrar pra GUI só se o user explicitamente recusar criar pela skill. |
 
 ## Workflow (file-only path)
 
@@ -688,8 +716,24 @@ If the user picked the file-only path in Step −1:
 
 ## Anti-patterns (all paths)
 
-- ❌ **Calling `add_chain` to make a new slot for the tone.** Chain ≠
-  slot. The slot is created by `apply_rig_nav Preset(-1)`.
+- ❌ **Calling `add_chain` WITHOUT the user picking "criar chain
+  nova" in Step 3.1 AND answering both name + instrument prompts.**
+  `add_chain` is only legitimate as the explicit Step 3.1 sub-flow
+  result — never to "make a slot for the tone" (that's
+  `apply_rig_nav Preset(-1)`), never to "re-shape" an existing chain,
+  never silently when the user said "preset" generically. Chain ≠
+  slot: a chain is a top-level rig group with its own I/O; a slot is
+  one preset position inside a chain's bank.
+- ❌ **Auto-picking a chain in Step 3.1 because its `instrument`
+  matches the song (or because it's the only candidate, or because
+  it's the only chain in the project).** Step 3.1 always renders the
+  full menu and waits for the user's pick — that's the entire point
+  of the step. Even "óbvia uma só, vou direto" is the marreta
+  behaviour the step exists to block.
+- ❌ **Substituting the full numbered menu in Step 3.1 with a
+  narrowed "use `<chain>`? (y/n)" ask.** Y/n hides the other chains
+  AND hides the "criar chain nova" option. Render the menu, every
+  time.
 - ❌ **Editing the chain's current blocks directly to write a new
   preset.** That destroys the user's existing active preset. Switch
   slots first.
