@@ -65,10 +65,14 @@ hash so it knows when to reinstall.
    ```bash
    .venv/bin/python scripts/analyze.py <input.wav>
    # or
-   .venv/bin/python scripts/compare.py <ref.wav> <wet.wav> [--ref-section IDX]
+   .venv/bin/python scripts/compare.py <ref.wav> <wet.wav> [--ref-section IDX] [--wet-section IDX]
    ```
    The script prints the resolved out-dir on its last line; default is
    `/tmp/openrig-analyzer/<unix_ts>/`.
+
+   `--wet-section` accepts an int index (pin a specific wet section) or the
+   literal `auto` (opt into the smarter auto-pick that skips silent background
+   sections). Omitted = section 0 (backward-compatible default).
 3. **Read the PNGs as visual evidence.** Use the Read tool on each
    `spec_*.png` or `ab_spec.png`. They're real images and you can see them.
 4. **Summarize in chat:**
@@ -117,3 +121,8 @@ into 8 sections, or a 4-minute song is reported as 1 section), say so to
 the user. The segmentation `k = ceil(duration_s / 30)` heuristic is
 deliberately conservative — bug reports from real usage are how it gets
 better.
+
+Se o wet for um render através de um DI com intro silencioso (caso comum do
+`input.wav` bundled), section_0 do wet vai ser silêncio. Pinar com
+`--wet-section IDX` apontando pra seção que contém o caráter alvo (use
+`analyze.py wet.wav` pra ver as seções).

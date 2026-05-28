@@ -48,6 +48,22 @@ CONVERGENCE_THRESHOLD = {
 
 CACHE_DIR = Path("/tmp/openrig-analyzer-cache")
 
+# ---------------------------------------------------------------------------
+# Section-picking constants (Single Source of Truth).
+#
+# auto_pick_wet_section ignores sections that are simultaneously labelled
+# `presence == background` AND quieter than BACKGROUND_RMS_THRESHOLD_DB.
+# This filters out silent intros / DI lead-ins that would otherwise dominate
+# section_0 of a wet render and produce false-negative deltas.
+# ---------------------------------------------------------------------------
+BACKGROUND_RMS_THRESHOLD_DB = -35.0
+BACKGROUND_PRESENCE_LABEL = "background"
+
+WET_SECTION_REASON_OVERRIDE = "user override via --wet-section"
+WET_SECTION_REASON_DEFAULT_FIRST = "first section (default)"
+WET_SECTION_REASON_AUTO_FALLBACK = "no non-background sections; fallback to first"
+WET_SECTION_AUTO_TOKEN = "auto"
+
 
 def _seed_everything(seed: int = _common.SEED) -> None:
     random.seed(seed)
@@ -110,8 +126,60 @@ def _section_similarity_no_timefx(ref_sec: dict, wet_sec: dict) -> float:
     return float(w_band * band_term + w_cent * centroid_term + w_thd * thd_term)
 
 
-def pick_ref_section(ref_fp: dict, wet_fp: dict, override_idx: int | None) -> tuple[dict, str]:
-    wet_section = wet_fp["sections"][0]
+def pick_wet_section(wet_fp: dict, override_idx: int | None) -> tuple[dict, str]:
+    """Pick the wet section to use as the basis of the delta.
+
+    - `override_idx is None` → backward-compatible default: section 0.
+    - `override_idx` int → that exact index (raises SystemExit if out of range).
+
+    Smarter auto-pick lives in `auto_pick_wet_section` and is opt-in via
+    `--wet-section auto` so callers that omit the flag get IDENTICAL behaviour
+    to the pre-fix code path.
+    """
+    if override_idx is not None:
+        if override_idx < 0 or override_idx >= len(wet_fp["sections"]):
+            raise SystemExit(
+                f"--wet-section {override_idx} out of range "
+                f"(have 0..{len(wet_fp['sections']) - 1})"
+            )
+        return wet_fp["sections"][override_idx], WET_SECTION_REASON_OVERRIDE
+    # default: section_0 (current behavior, backward compat)
+    return wet_fp["sections"][0], WET_SECTION_REASON_DEFAULT_FIRST
+
+
+def auto_pick_wet_section(wet_fp: dict) -> tuple[dict, str]:
+    """Pick the loudest wet section that is NOT silent background.
+
+    A section is treated as silent background when it carries the
+    `background` presence label AND its RMS is below
+    `BACKGROUND_RMS_THRESHOLD_DB`. If every section qualifies as
+    silent-background, falls back to section 0 with an explanatory reason.
+    """
+    candidates = [
+        s for s in wet_fp["sections"]
+        if not (
+            s["labels"]["presence"] == BACKGROUND_PRESENCE_LABEL
+            and s["loudness"]["rms_db"] < BACKGROUND_RMS_THRESHOLD_DB
+        )
+    ]
+    if not candidates:
+        return wet_fp["sections"][0], WET_SECTION_REASON_AUTO_FALLBACK
+    best = max(candidates, key=lambda s: s["loudness"]["rms_db"])
+    return best, f"highest-RMS non-background ({best['id']})"
+
+
+def pick_ref_section(
+    ref_fp: dict,
+    wet_fp: dict,
+    override_idx: int | None,
+    wet_section: dict,
+) -> tuple[dict, str]:
+    """Pick the reference section that best matches `wet_section`.
+
+    `wet_section` is supplied explicitly by the caller (see `pick_wet_section`)
+    so the auto-pick scoring is consistent with the section the final delta
+    will be computed against.
+    """
     if override_idx is not None:
         if override_idx < 0 or override_idx >= len(ref_fp["sections"]):
             raise SystemExit(
@@ -324,6 +392,8 @@ def assemble_diff(
     wet_fp: dict,
     matched_section: dict,
     matched_reason: str,
+    wet_section: dict,
+    wet_reason: str,
     delta: dict,
     match_score: float,
     recommendations: list[dict],
@@ -344,7 +414,8 @@ def assemble_diff(
         },
         "rendered": {
             "fingerprint_sha256": wet_fp["source"]["sha256"],
-            "section_id": wet_fp["sections"][0]["id"],
+            "section_id": wet_section["id"],
+            "section_id_reason": wet_reason,
         },
         "match_score": float(match_score),
         "delta": delta,
@@ -425,6 +496,18 @@ def write_diff_json(diff: dict[str, Any], out_dir: Path) -> Path:
     return path
 
 
+def _parse_wet_section_arg(raw: str) -> int | str:
+    """Argparse type for --wet-section: accept an int index or the literal "auto"."""
+    if raw == WET_SECTION_AUTO_TOKEN:
+        return WET_SECTION_AUTO_TOKEN
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--wet-section must be an int or 'auto', got {raw!r}"
+        ) from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="A/B compare a reference WAV with a wet WAV.")
     parser.add_argument("reference", help="path to reference WAV")
@@ -432,6 +515,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--ref-section", type=int, default=None,
                         help="force a specific reference section index (overrides auto-pick)")
+    parser.add_argument(
+        "--wet-section",
+        type=_parse_wet_section_arg,
+        default=None,
+        help=(
+            "force a specific wet section index (overrides default first-section "
+            "behavior). Pass 'auto' to use the smarter auto-pick that skips silent "
+            "background sections."
+        ),
+    )
     args = parser.parse_args(argv)
 
     _seed_everything()
@@ -445,17 +538,28 @@ def main(argv: list[str] | None = None) -> int:
     if not wet_fp["sections"]:
         raise SystemExit("wet file has no detectable sections")
 
-    matched_section, matched_reason = pick_ref_section(ref_fp, wet_fp, args.ref_section)
+    # Pick the wet section FIRST so ref-section matching scores against the
+    # actual section the delta will be computed against.
+    if args.wet_section == WET_SECTION_AUTO_TOKEN:
+        wet_section, wet_reason = auto_pick_wet_section(wet_fp)
+    else:
+        wet_section, wet_reason = pick_wet_section(wet_fp, args.wet_section)
+
+    matched_section, matched_reason = pick_ref_section(
+        ref_fp, wet_fp, args.ref_section, wet_section
+    )
 
     # alignment for time-domain confidence (advisory; deltas remain section-aggregated)
     lag, align_conf = _common.align_signals(ref_signal, wet_signal, ref_sr)
 
-    wet_section = wet_fp["sections"][0]
     delta = compute_delta(matched_section, wet_section, align_conf)
     match_score = compute_match_score(delta)
     recommendations = build_recommendations(delta, matched_section, wet_section)
-    diff = assemble_diff(ref_fp, wet_fp, matched_section, matched_reason,
-                         delta, match_score, recommendations)
+    diff = assemble_diff(
+        ref_fp, wet_fp, matched_section, matched_reason,
+        wet_section, wet_reason,
+        delta, match_score, recommendations,
+    )
 
     out_dir = analyze.resolve_out_dir(args.out_dir)
     write_diff_json(diff, out_dir)
