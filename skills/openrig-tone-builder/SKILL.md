@@ -325,6 +325,67 @@ fingerprint) skipped, this preset will be research-only and cannot be
 validated objectively". The user can then choose to provide a WAV or
 accept the limitation.
 
+### ⛔ HARD RULE — no suppositions about what the reference contains
+
+> Every claim about what is IN the user's reference WAV must cite a
+> **fingerprint field** (or a directly readable artefact: spectrogram
+> PNG, `analysis.pdf`, the raw waveform). **Cultural priors about the
+> song / artist / era / genre are NOT evidence about THIS specific
+> WAV.** If the fingerprint doesn't measure something, you don't know
+> it — say so explicitly.
+
+**Always forbidden** (even in chat narration, even in casual asides,
+even when explaining why the wet doesn't match the ref):
+
+- Claiming a **playing technique** that no fingerprint field measures.
+  The fingerprint exposes `tone_profile` (clean / crunch / distortion /
+  high_gain), `dynamics_profile` (sparse / rhythmic / sustained),
+  `presence`, `loudness`, `spectrum`, `distortion`, `time_fx`. It does
+  **not** measure palm-mute, fingerpicking, alternate picking, sweep
+  picking, tapping, hybrid picking, arpeggios, chugging, or strumming
+  pattern. Saying "palm-mute pesado" / "fingerpicking limpo" /
+  "arpeggios típicos do Edge" about the user's WAV is **fabrication**
+  unless you can point at a specific waveform or spectrogram detail
+  that supports it (and even then, label it "consistent with X", not
+  "the WAV is X").
+- Inferring content from the **song title** ("o riff do Metallica
+  obviamente tem palm-mute"), the **artist** ("Edge usa dotted-eighth
+  delay"), the **album/era** ("essa fase do U2 era arpeggio limpo"),
+  or **memory of how the song sounds in your head**. The user's WAV is
+  what the user's WAV is — it might be a cover, a stem isolated
+  imperfectly, a different section than you expect, a live take, or a
+  remix. Cultural priors belong in **research** (Step 1, which fills
+  *gaps* the fingerprint cannot reveal — gear models, era, recording
+  context), NOT in claims about what the reference WAV contains.
+- Inventing differences between the bundled DI and the user's
+  reference to explain a low match_score ("o DI é fingerpicking limpo
+  e o Moisés tocou palm-mute, então a diferença é técnica"). That
+  shifts blame to fabricated technique mismatch instead of admitting
+  the preset's tone gap. If you observe a real gap, name it via
+  fingerprint deltas (`centroid Δ`, `band_energy Δ`, `THD Δ`,
+  `time_fx`) — never via guessed performance differences.
+
+**How to phrase claims correctly** — pair every observation with its
+fingerprint citation:
+
+- ✅ "section 2 do ref tem `tone_profile: high_gain` (conf 0.88) e
+  `dynamics_profile: rhythmic` — meu render saiu `crunch` na mesma
+  janela, deficit de THD ~7%."
+- ✅ "não consigo afirmar a técnica do tocador a partir do
+  fingerprint — o analisador não mede palm-mute ou fingerpicking. O
+  que dá pra ver é `dynamics_profile: rhythmic` e onset rate alto."
+- ❌ "o Moisés provavelmente tá tocando palm-mute pesado, por isso o
+  som tá mais comprimido." (Inventou técnica + atribuiu causa sem
+  evidência.)
+- ❌ "o riff do Metallica precisa de palm-mute, então o gap é por
+  causa disso." (Cultural prior sobre Metallica + technique
+  fabrication.)
+
+**Red Flag self-check before sending any chat message about the
+reference**: "Estou afirmando que a WAV do user CONTÉM X. Posso colar
+o campo do fingerprint que mostra X? Se não, REWRITE — substitua por
+'o fingerprint mostra Y, então X é especulação' OU corte a frase."
+
 **Stem vs mix caveat:** an isolated stem's centroid describes the
 guitar; a full-mix centroid is dominated by drums/bass/keys and is
 only an upper bound on what the guitar contributes. When the WAV is a
@@ -981,6 +1042,23 @@ read-render-compare over persistent artifacts.
 ## Red flags -- STOP
 
 - Running `find crates/` or `grep MODEL_ID` or `Read` on any `.rs` file.
+- Writing chat output that **claims a playing technique** (palm-mute,
+  fingerpicking, alternate picking, sweep, tapping, arpeggio,
+  chugging, strumming pattern) about the user's reference WAV. The
+  analyzer fingerprint does NOT measure technique. Stating it = pure
+  fabrication, even when the song or artist makes it "obvious". See
+  **Step 0 HARD RULE — no suppositions**.
+- Inventing a difference between the bundled DI and the user's
+  reference to explain a low match_score ("o DI é fingerpicking
+  limpo, o Moisés tocou palm-mute"). Name real fingerprint deltas
+  (`centroid Δ`, `band_energy Δ`, `THD Δ`, `time_fx`), never guessed
+  performance differences. The gap is in the **preset**, not in
+  invented technique.
+- Using song-title / artist / era / genre knowledge as evidence about
+  what's in THIS WAV. The user may have sent a cover, a different
+  section, a live take, a remix, or a stem isolated imperfectly.
+  Cultural priors feed **research** (Step 1), never claims about the
+  audio.
 - `Read` / `grep` / `Bash cat` / `WebFetch` on `blocks-reference.md`
   WITHOUT having read `openrig://plugins` in this turn first. The doc
   is a **recipe lookup keyed by `MODEL_ID`**, not a discovery channel.
@@ -1105,6 +1183,10 @@ read-render-compare over persistent artifacts.
 | "Vou grepar `blocks-reference.md` por `vox ac30` / `streets` / `u2` pra achar o `MODEL_ID` mais rápido" | NÃO. Isso é discovery. Discovery é `openrig://plugins` SEMPRE. O doc é consultado DEPOIS, por `MODEL_ID`, pra recipe (knob values, pairings). Greping o doc por marca de amp, música ou artista = uso errado. Comportamento já corrigido várias vezes nesta conversa — não repita. |
 | "O doc tem uma seção sobre U2 / Edge / Coldplay, vou começar por lá" | A seção é recipe (knob settings, pairings) — útil DEPOIS que você tem o `MODEL_ID` via `openrig://plugins`. Começar pelo doc inverte a ordem e silenciosamente ignora plugins instalados que não estão no doc. Step 2 HARD GATE: plugins primeiro, doc depois. |
 | "Tenho strong prior do timbre, vou direto pro doc confirmar" | "Strong prior" não substitui a leitura de `openrig://plugins`. O usuário pode ter um plugin instalado que bate melhor com o prior do que o que está documentado. Step 2 sub-step 1 (read `openrig://plugins`) é incondicional. |
+| "O Moisés tá tocando palm-mute no Metallica, então o ref vai ter palm-mute pesado" | NÃO. Você não sabe o que tem no ref antes de ler o fingerprint. Cultural prior (música/artista/era) NÃO é evidência sobre ESTA WAV específica. O analisador não mede palm-mute. Diga "o fingerprint mostra `dynamics_profile: rhythmic` e `tone_profile: high_gain`" — não fabrique técnica. |
+| "Vou explicar o gap entre wet e ref como 'a performance é diferente' (DI fingerpicking vs Moisés palm-mute)" | Inventar diferença de performance pra justificar match_score baixo = mover a culpa do preset pra uma fabricação. O gap real é o que os campos `Δ` do diff mostram (centroid, band_energy, THD, time_fx). Cite os deltas — não invente técnica. |
+| "Edge usa dotted-eighth delay, então o ref do Streets vai ter delay com mix alto" | "Edge usa" é prior cultural pra Step 1 (research que mapeia gear). Sobre ESTA WAV, só o fingerprint fala: olhe `time_fx.delay_present` / `delay_time_ms_estimate` / `delay_feedback_estimate_pct`. Se o fingerprint não mostra delay, o ref não tem delay nessa seção — independente do que o Edge faz. |
+| "A música é Metallica, então o tom é high_gain óbvio — pulo o fingerprint" | Step 0 é incondicional. WAV pode ser cover, take diferente, mix limpo, ou um take antes do dist ligar. Você LÊ o fingerprint, sempre. "Óbvio" + cultural prior = exatamente a falha que essa skill existe pra bloquear. |
 | "O usuário pediu o preset, fetchar capture é fora de escopo da tone-builder" | Fora de escopo seria dispatch direto; a Step 2.5 só OFERECE o fetch como (a) e delega à `openrig-tone3000-fetch` quando o user aceita. Não oferecer = decidir pelo (b) escondido. |
 | "Vou deixar o `add_block` falhar e aí rodo Step 2.5 quando descobrir o erro" | Wrong order. 2.5 é **precondition** pra Step 3, não recovery. O error path polui o log, deixa estado parcial na chain e contorna a pergunta (a)/(b). Leia `openrig://plugins` PRIMEIRO. |
 | "Os blocos stock (`compressor_*`, `gate_basic`, `limiter_brickwall`) são built-in, óbvio que estão instalados — checo só os NAM/IR" | A Step 2.5 diz **for every `MODEL_ID`**. Stock pode estar desabilitado em builds custom, renomeado entre versões, ou ausente em forks. O custo do cross-check é uma leitura de resource — não vale a pena economizar. |
