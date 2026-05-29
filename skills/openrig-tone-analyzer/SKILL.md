@@ -119,6 +119,15 @@ Short form:
 
 - `fingerprint.json` v2: `source`, `global`, `sections[]` (each with
   `loudness`, `spectrum`, `distortion`, `time_fx`, `labels`).
+- `analysis.pdf`: human-readable report emitted by `analyze.py` alongside
+  the JSON + PNGs. Multi-page, landscape letter: (1) cover with source
+  metadata + global LUFS/peak/stereo, (2) full-track mel spectrogram with
+  section boundaries, (3+) one page per section showing labels / loudness
+  / spectrum / distortion / time_fx + band-energy table + the section's
+  mel spectrogram. Hand this to the user when they ask for the analysis
+  in a single document. Filename is fixed (`analysis.pdf`) so callers
+  can find it deterministically; lives in the same `--out-dir` as the
+  JSON.
 - `diff.json` v2: `reference.matched_section_id`, `rendered`, `match_score`,
   `delta.*`, `recommendations[]` (priority-sorted, each with `target`,
   `action`, `rationale`), `converged`.

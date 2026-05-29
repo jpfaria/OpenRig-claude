@@ -110,3 +110,47 @@ def test_long_file_rejected(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         analyze.main([str(long_path), "--out-dir", str(tmp_path / "out")])
     assert "too long" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# PDF report
+# ---------------------------------------------------------------------------
+
+def test_analyze_emits_pdf_report_at_default_filename(clean_di_path: Path, tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    analyze.main([str(clean_di_path), "--out-dir", str(out_dir)])
+    pdf_path = out_dir / analyze.PDF_FILENAME
+    assert pdf_path.exists(), f"expected {analyze.PDF_FILENAME} in {out_dir}, got {list(out_dir.iterdir())}"
+
+
+def test_pdf_starts_with_pdf_magic_bytes(clean_di_path: Path, tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    analyze.main([str(clean_di_path), "--out-dir", str(out_dir)])
+    head = (out_dir / analyze.PDF_FILENAME).read_bytes()[:5]
+    assert head == b"%PDF-", f"expected PDF magic header, got {head!r}"
+
+
+def test_pdf_above_minimum_content_size(clean_di_path: Path, tmp_path: Path) -> None:
+    out_dir = tmp_path / "out"
+    analyze.main([str(clean_di_path), "--out-dir", str(out_dir)])
+    size = (out_dir / analyze.PDF_FILENAME).stat().st_size
+    # cover page + global spectrogram + at least 1 section page = always > 20KB
+    # for a real analysis. Empty / malformed PDFs are well under this.
+    assert size > 20_000, f"PDF suspiciously small ({size} bytes) — likely missing pages"
+
+
+def test_pdf_multi_section_pages_count_scales_with_sections(
+    multi_section_path: Path, tmp_path: Path,
+) -> None:
+    out_dir = tmp_path / "out"
+    analyze.main([str(multi_section_path), "--out-dir", str(out_dir)])
+    fp = json.loads((out_dir / "fingerprint.json").read_text())
+    pdf = (out_dir / analyze.PDF_FILENAME).read_bytes()
+    # Count `/Type /Page ` (trailing space — leaf page) excluding `/Type /Pages` (parent).
+    import re
+    page_markers = len(re.findall(rb"/Type\s+/Page\b(?!s)", pdf))
+    expected_min = 1 + 1 + len(fp["sections"])  # cover + global + per-section
+    assert page_markers >= expected_min, (
+        f"expected at least {expected_min} pages (cover + global + {len(fp['sections'])} sections), "
+        f"got {page_markers} /Type /Page markers"
+    )

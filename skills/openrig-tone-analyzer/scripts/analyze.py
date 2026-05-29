@@ -26,6 +26,10 @@ from scripts import _common  # noqa: E402
 
 SCHEMA_VERSION = 2
 
+PDF_FILENAME = "analysis.pdf"
+PDF_PAGE_FIGSIZE = (11.0, 8.5)  # landscape letter, inches
+PDF_DPI = 100
+
 
 def _seed_everything(seed: int = _common.SEED) -> None:
     random.seed(seed)
@@ -256,6 +260,207 @@ def render_spec_section_png(
     return output
 
 
+def _fmt_or_dash(value: Any, fmt: str = "{}") -> str:
+    if value is None:
+        return "—"
+    try:
+        return fmt.format(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _section_summary_lines(section: dict[str, Any]) -> list[tuple[str, str]]:
+    """Return [(panel_label, panel_body), ...] for the per-section PDF page."""
+    labels = section["labels"]
+    loud = section["loudness"]
+    spec = section["spectrum"]
+    dist = section["distortion"]
+    fx = section["time_fx"]
+    return [
+        ("Labels", (
+            f"tone_profile = {labels.get('tone_profile', '—')}    "
+            f"dynamics_profile = {labels.get('dynamics_profile', '—')}    "
+            f"presence = {labels.get('presence', '—')}"
+        )),
+        ("Loudness", (
+            f"RMS = {_fmt_or_dash(loud['rms_db'], '{:.1f}')} dB    "
+            f"Peak = {_fmt_or_dash(loud['peak_db'], '{:.1f}')} dB    "
+            f"Crest = {_fmt_or_dash(loud['crest_factor_db'], '{:.1f}')} dB"
+        )),
+        ("Spectrum", (
+            f"Centroid = {_fmt_or_dash(spec['spectral_centroid_hz'], '{:.0f}')} Hz    "
+            f"Rolloff (85%) = {_fmt_or_dash(spec['spectral_rolloff_hz_85pct'], '{:.0f}')} Hz    "
+            f"Flatness = {_fmt_or_dash(spec['spectral_flatness'], '{:.3f}')}"
+        )),
+        ("Distortion", (
+            f"THD ≈ {_fmt_or_dash(dist['thd_estimate_pct'], '{:.1f}')} %    "
+            f"odd/even = {_fmt_or_dash(dist['odd_to_even_harmonic_ratio_db'], '{:+.1f}')} dB    "
+            f"gain_character = {dist['gain_character']} "
+            f"(conf {_fmt_or_dash(dist['gain_character_confidence'], '{:.2f}')})"
+        )),
+        ("Time FX", (
+            f"RT60 = {_fmt_or_dash(fx['reverb_rt60_s'], '{:.2f}')} s    "
+            f"delay = {'on' if fx['delay_present'] else 'off'} "
+            f"({_fmt_or_dash(fx['delay_time_ms_estimate'], '{} ms')}, "
+            f"fb {_fmt_or_dash(fx['delay_feedback_estimate_pct'], '{}%')})    "
+            f"mod = {'on' if fx['modulation_present'] else 'off'} "
+            f"({_fmt_or_dash(fx['modulation_rate_hz'], '{:.1f} Hz')}, "
+            f"depth {_fmt_or_dash(fx['modulation_depth_estimate'], '{:.2f}')})"
+        )),
+    ]
+
+
+def _band_energy_lines(section: dict[str, Any]) -> str:
+    bands = section["spectrum"]["bands_hz"]
+    energies = section["spectrum"]["band_energy_db"]
+    parts = [f"{int(b)} Hz: {e:+.1f}" for b, e in zip(bands, energies)]
+    # join in groups of 4 per row for readability
+    rows = ["    ".join(parts[i:i + 4]) for i in range(0, len(parts), 4)]
+    return "\n".join(rows)
+
+
+def _render_pdf_cover_page(pdf, fingerprint: dict[str, Any], audio_path: Path) -> None:
+    import matplotlib.pyplot as plt
+
+    src = fingerprint["source"]
+    glob = fingerprint["global"]
+    sections = fingerprint["sections"]
+    fig = plt.figure(figsize=PDF_PAGE_FIGSIZE, dpi=PDF_DPI)
+    ax = fig.add_subplot(111)
+    ax.axis("off")
+
+    title = f"Tone Analysis — {audio_path.name}"
+    ax.text(0.5, 0.95, title, ha="center", va="top", fontsize=18, fontweight="bold")
+
+    lines = [
+        ("Source",       str(src["path"])),
+        ("SHA-256",      src["sha256"]),
+        ("Sample rate",  f"{src['sample_rate_hz']} Hz"),
+        ("Channels",     str(src["channels"])),
+        ("Duration",     f"{src['duration_s']:.2f} s"),
+        ("Schema",       f"v{fingerprint['schema_version']}"),
+        ("",             ""),
+        ("LUFS (int.)",  _fmt_or_dash(glob.get('lufs_integrated'), '{:.1f} LUFS')),
+        ("Peak",         _fmt_or_dash(glob.get('peak_db'), '{:+.1f} dB')),
+        ("Stereo width", _fmt_or_dash(glob.get('stereo', {}).get('width'), '{:.2f}')),
+        ("",             ""),
+        ("Sections",     f"{len(sections)} (see following pages)"),
+    ]
+    y = 0.85
+    for label, value in lines:
+        ax.text(0.10, y, label, fontsize=11, fontweight="bold", family="monospace")
+        ax.text(0.30, y, value, fontsize=11, family="monospace")
+        y -= 0.045
+
+    ax.text(0.5, 0.04, "openrig-tone-analyzer", ha="center", va="bottom",
+            fontsize=8, color="gray", style="italic")
+    pdf.savefig(fig, dpi=PDF_DPI)
+    plt.close(fig)
+
+
+def _render_pdf_global_page(
+    pdf,
+    signal: np.ndarray,
+    sr: int,
+    sections_ranges: list[tuple[float, float]],
+    audio_path: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+    import librosa
+    import librosa.display
+
+    sig = _common.mono_mixdown(signal).astype(np.float64)
+    if len(sig) == 0:
+        sig = np.zeros(sr, dtype=np.float64)
+    mel = librosa.feature.melspectrogram(y=sig, sr=sr, n_mels=128, fmax=sr / 2)
+    mel_db = librosa.power_to_db(mel, ref=np.max)
+
+    fig, ax = plt.subplots(figsize=PDF_PAGE_FIGSIZE, dpi=PDF_DPI)
+    img = librosa.display.specshow(
+        mel_db, sr=sr, x_axis="time", y_axis="mel", fmax=sr / 2, ax=ax, cmap="magma",
+    )
+    fig.colorbar(img, ax=ax, format="%+2.0f dB")
+    ax.set_title(f"{audio_path.name} — global ({len(sections_ranges)} sections)")
+    boundaries = [end for (_, end) in sections_ranges[:-1]]
+    for b in boundaries:
+        if 0 < b < len(sig) / sr:
+            ax.axvline(b, color="cyan", linestyle="--", linewidth=1.0, alpha=0.8)
+    fig.tight_layout()
+    pdf.savefig(fig, dpi=PDF_DPI)
+    plt.close(fig)
+
+
+def _render_pdf_section_page(
+    pdf,
+    section: dict[str, Any],
+    signal: np.ndarray,
+    sr: int,
+    audio_path: Path,
+) -> None:
+    import matplotlib.pyplot as plt
+    import librosa
+    import librosa.display
+
+    sec = _slice_signal(signal, sr, section["start_s"], section["end_s"])
+    sec_mono = _common.mono_mixdown(sec).astype(np.float64)
+    if len(sec_mono) == 0:
+        sec_mono = np.zeros(sr, dtype=np.float64)
+    mel = librosa.feature.melspectrogram(y=sec_mono, sr=sr, n_mels=128, fmax=sr / 2)
+    mel_db = librosa.power_to_db(mel, ref=np.max)
+
+    fig = plt.figure(figsize=PDF_PAGE_FIGSIZE, dpi=PDF_DPI)
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 2], hspace=0.35)
+
+    text_ax = fig.add_subplot(gs[0])
+    text_ax.axis("off")
+    header = (
+        f"{section['id']}  ·  {section['start_s']:.2f} s – {section['end_s']:.2f} s  ·  "
+        f"{section['labels'].get('tone_profile', '—')}"
+    )
+    text_ax.text(0.0, 1.0, header, fontsize=14, fontweight="bold", va="top")
+
+    y = 0.82
+    for label, body in _section_summary_lines(section):
+        text_ax.text(0.0, y, label, fontsize=10, fontweight="bold", family="monospace", va="top")
+        text_ax.text(0.16, y, body, fontsize=10, family="monospace", va="top")
+        y -= 0.13
+
+    text_ax.text(0.0, y, "Band energy (dB)", fontsize=10, fontweight="bold",
+                 family="monospace", va="top")
+    text_ax.text(0.16, y, _band_energy_lines(section), fontsize=9, family="monospace", va="top")
+
+    spec_ax = fig.add_subplot(gs[1])
+    img = librosa.display.specshow(
+        mel_db, sr=sr, x_axis="time", y_axis="mel", fmax=sr / 2, ax=spec_ax, cmap="magma",
+    )
+    fig.colorbar(img, ax=spec_ax, format="%+2.0f dB")
+    spec_ax.set_title(f"Spectrogram — {section['id']}")
+
+    pdf.savefig(fig, dpi=PDF_DPI)
+    plt.close(fig)
+
+
+def build_pdf_report(
+    fingerprint: dict[str, Any],
+    signal: np.ndarray,
+    sr: int,
+    audio_path: Path,
+    out_dir: Path,
+) -> Path:
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    pdf_path = out_dir / PDF_FILENAME
+    sections_ranges = [(s["start_s"], s["end_s"]) for s in fingerprint["sections"]]
+    with PdfPages(pdf_path) as pdf:
+        _render_pdf_cover_page(pdf, fingerprint, audio_path)
+        _render_pdf_global_page(pdf, signal, sr, sections_ranges, audio_path)
+        for section in fingerprint["sections"]:
+            _render_pdf_section_page(pdf, section, signal, sr, audio_path)
+    return pdf_path
+
+
 def write_fingerprint_json(fingerprint: dict[str, Any], out_dir: Path) -> Path:
     path = out_dir / "fingerprint.json"
     payload = json.dumps(fingerprint, indent=2, sort_keys=True)
@@ -294,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
         render_spec_section_png(
             signal, sr, s["start_s"], s["end_s"], s["id"], audio_path, out_dir,
         )
+
+    build_pdf_report(fingerprint, signal, sr, audio_path, out_dir)
 
     print(str(out_dir))
     return 0
