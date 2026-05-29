@@ -1042,6 +1042,18 @@ read-render-compare over persistent artifacts.
 ## Red flags -- STOP
 
 - Running `find crates/` or `grep MODEL_ID` or `Read` on any `.rs` file.
+- Saying "vou persistir essa regra na memory" / "vou salvar isso pra
+  não repetir" / "I'll remember this for next time" / proposing any
+  write to `~/.claude/projects/*/memory/` to capture a user
+  correction. **Corrections never go to local memory.** Local memory
+  is per-machine, per-user, doesn't ship with the plugin, isn't
+  reviewed, isn't versioned — the next contributor / next install /
+  next session on a different laptop sees nothing. Corrections go
+  into the **SKILL** (this file) or the project's **`CLAUDE.md`**.
+  If you find yourself wanting to "save a lesson", stop and edit
+  the relevant `SKILL.md` instead — that's the durable artefact the
+  next agent will load. See the project's `CLAUDE.md` ("Persistence:
+  skill / CLAUDE.md over local memory") for the full rule.
 - Writing chat output that **claims a playing technique** (palm-mute,
   fingerpicking, alternate picking, sweep, tapping, arpeggio,
   chugging, strumming pattern) about the user's reference WAV. The
@@ -1187,6 +1199,8 @@ read-render-compare over persistent artifacts.
 | "Vou explicar o gap entre wet e ref como 'a performance é diferente' (DI fingerpicking vs Moisés palm-mute)" | Inventar diferença de performance pra justificar match_score baixo = mover a culpa do preset pra uma fabricação. O gap real é o que os campos `Δ` do diff mostram (centroid, band_energy, THD, time_fx). Cite os deltas — não invente técnica. |
 | "Edge usa dotted-eighth delay, então o ref do Streets vai ter delay com mix alto" | "Edge usa" é prior cultural pra Step 1 (research que mapeia gear). Sobre ESTA WAV, só o fingerprint fala: olhe `time_fx.delay_present` / `delay_time_ms_estimate` / `delay_feedback_estimate_pct`. Se o fingerprint não mostra delay, o ref não tem delay nessa seção — independente do que o Edge faz. |
 | "A música é Metallica, então o tom é high_gain óbvio — pulo o fingerprint" | Step 0 é incondicional. WAV pode ser cover, take diferente, mix limpo, ou um take antes do dist ligar. Você LÊ o fingerprint, sempre. "Óbvio" + cultural prior = exatamente a falha que essa skill existe pra bloquear. |
+| "O user me corrigiu — vou salvar essa lição na memory pra não repetir" | NÃO. Memory local (`~/.claude/projects/*/memory/`) é per-machine, per-user, não viaja com o plugin. Correção vira edit no `SKILL.md` (esta skill) OU no `CLAUDE.md` do projeto. Se o user corrige um comportamento da skill, o fix é literalmente ESTA frase aqui — adicione uma Red Flag, uma Rationalization, ou um sub-step que bloqueie o comportamento. Memory ≠ persistência. |
+| "Vou propor pro user que ele guarde isso na memory dele pra próxima sessão" | Pior ainda — você terceiriza pro user uma decisão que é responsabilidade da skill. Se a correção é válida, ela já é parte do contrato da skill — vai pro `SKILL.md`. Nada de empurrar a manutenção pro local-storage do user. |
 | "O usuário pediu o preset, fetchar capture é fora de escopo da tone-builder" | Fora de escopo seria dispatch direto; a Step 2.5 só OFERECE o fetch como (a) e delega à `openrig-tone3000-fetch` quando o user aceita. Não oferecer = decidir pelo (b) escondido. |
 | "Vou deixar o `add_block` falhar e aí rodo Step 2.5 quando descobrir o erro" | Wrong order. 2.5 é **precondition** pra Step 3, não recovery. O error path polui o log, deixa estado parcial na chain e contorna a pergunta (a)/(b). Leia `openrig://plugins` PRIMEIRO. |
 | "Os blocos stock (`compressor_*`, `gate_basic`, `limiter_brickwall`) são built-in, óbvio que estão instalados — checo só os NAM/IR" | A Step 2.5 diz **for every `MODEL_ID`**. Stock pode estar desabilitado em builds custom, renomeado entre versões, ou ausente em forks. O custo do cross-check é uma leitura de resource — não vale a pena economizar. |
