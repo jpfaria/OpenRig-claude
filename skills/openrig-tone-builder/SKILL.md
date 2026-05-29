@@ -531,17 +531,54 @@ Steps:
    > **(1)** chain `<id>` ('<display name>', instrument `<x>`, blocos atuais: `<short summary>`)
    > **(2)** chain `<id>` ('<display name>', instrument `<y>`, ...)
    > ...
-   > **(N+1) criar chain nova** — eu pergunto nome + instrumento e chamo `add_chain`."
+   > **(N+1) criar chain nova** — eu pergunto nome + instrumento + I/O devices e chamo `add_chain`."
 
    You MAY recommend one option in the ask message (e.g. "sugiro **(1)** porque o `instrument` bate com o estilo da música"), but you **MUST wait for the user's explicit pick**. Auto-selecting because "só uma chain bate com o instrumento" is forbidden — that is the deterministic "marreta" behaviour this step exists to prevent.
 
    **If the user picks `(N+1) criar chain nova`**, sub-flow:
-   - Ask the user the **chain name** (free text, e.g. "Lead Solos", "Rhythm — Drop D", "Clean Acoustic") **AND** the **`instrument`** tag (`electric_guitar` / `acoustic_guitar` / `bass_guitar` / etc.) in the same ask, OR one after the other if you must.
-   - If the user answers only one of the two (e.g. name but not instrument), **re-ask the missing one explicitly**. Never infer the instrument from the song or from the chain name. The user picked "criar chain nova" and must answer both prompts; checklist requires it.
-   - Call `add_chain { name, instrument, ... }` and capture the returned chain id. If `add_chain` errors (duplicate name, invalid instrument, etc.), **STOP and surface the exact error to the user** — do not retry with a mutated name, do not silently switch to one of the existing chains. Ask the user to either correct the input or pick a different option from the menu.
-   - Once you have the new chain id, continue the preset build into it.
 
-   **If `openrig://project` returns ZERO chains**, you may go straight to the create-new sub-flow (still asking name + instrument), but say out loud "sua rig não tem chains ainda — vou criar uma" so the user knows. Don't render an empty menu.
+   1. **Name + instrument prompts.** Ask the user the **chain name** (free text, e.g. "Lead Solos", "Rhythm — Drop D", "Clean Acoustic") **AND** the **`instrument`** tag (`electric_guitar` / `acoustic_guitar` / `bass_guitar` / etc.) in the same ask, OR one after the other if you must. If the user answers only one of the two, **re-ask the missing one explicitly**. Never infer the instrument from the song or from the chain name.
+
+   2. **Read `openrig://devices` and present I/O menus.** A chain without an Input block and an Output block is unusable (the `add_chain` schema's `Chain.blocks` requires at least one of each for the audio graph to wire). Read the resource ONCE, **immediately before** the menus — not minutes earlier and not in a prior turn. The device list is a snapshot at read time; if the user mentions replugging an interface between the menu and the `add_chain` call, re-read `openrig://devices` and restart this sub-step. Render TWO numbered menus — one for input, one for output — using the actual `<label>` + `device_id` strings the resource returned (do NOT echo example device names from this skill text or memory of a prior conversation):
+
+      > "Input device pra essa chain?
+      > **(1)** `<input label 1>` (`<device_id 1>`)
+      > **(2)** `<input label 2>` (`<device_id 2>`)
+      > ...
+      >
+      > Output device?
+      > **(1)** `<output label 1>` (`<device_id 1>`)
+      > **(2)** `<output label 2>` (`<device_id 2>`)
+      > ..."
+
+      You MAY recommend one input (e.g. "sugiro o Scarlett porque parece ser a interface principal") and one output, but you MUST wait for the user's explicit pick on each. Even when the rig has only one input or one output device, render the menu — same rule as the chain pick. Y/n shortcut is forbidden.
+
+   3. **Channels + mode prompts.** For each chosen device, ask the user the **channel list** (e.g. `[1]` for mono guitar input on channel 1, `[1, 2]` for stereo L/R) AND the **mode** (`mono` / `stereo` / `dual_mono` for inputs; `mono` / `stereo` for outputs). You MAY suggest a sensible default per `instrument` tag (e.g. mono guitar input usually = single channel + `mono`; stereo output usually = channels 1,2 + `stereo`), but the suggestion goes IN the ask, not as a self-applied default. If the user does not answer all four (in-device, in-channels+mode, out-device, out-channels+mode), re-ask the missing ones explicitly.
+
+   4. **Build the Chain payload and call `add_chain`.** Construct:
+
+      ```json
+      {
+        "chain": {
+          "enabled": true,
+          "instrument": "<from step 1>",
+          "blocks": [
+            { "id": "rig:input", "kind": { "Input":  { "entries": [{ "device_id": "<from step 2>", "channels": [<from step 3>], "mode": "<from step 3>" }] } } },
+            { "id": "rig:output", "kind": { "Output": { "entries": [{ "device_id": "<from step 2>", "channels": [<from step 3>], "mode": "<from step 3>" }] } } }
+          ]
+        }
+      }
+      ```
+
+      The `description` field is optional — set it to the chain name from step 1 if the user wants the label persisted that way (note: chain `label` vs `description` may differ across OpenRig versions; if a future release adds a first-class `name`/`label` field to the `add_chain` schema, prefer it). Capture the returned chain id.
+
+      **Multi-entry case (rare):** `Input.entries[]` and `Output.entries[]` are arrays — a chain CAN carry more than one device per side (e.g. two guitars sharing one chain via `dual_mono`, or output mirrored to two outputs). The standard create-new flow above assumes ONE device per side. If the user explicitly asks for a multi-device chain, repeat step 3 per additional device and append to the `entries[]` array. Don't assume multi-device by default.
+
+      If `add_chain` errors (invalid device_id, channel out of range for the device, schema mismatch, etc.), **STOP and surface the exact error to the user** — do not retry with mutated values, do not silently fall back to a different device, do not switch to an existing chain. Ask the user to correct the input or pick a different option from the original Step 3.1 menu.
+
+   5. **Continue the preset build into the new chain id.**
+
+   **If `openrig://project` returns ZERO chains**, you may go straight to the create-new sub-flow (still asking name + instrument + I/O devices + channels/mode), but say out loud "sua rig não tem chains ainda — vou criar uma" so the user knows. Don't render an empty menu.
 
    **If `openrig://project` returns exactly ONE chain**, you still render the menu (option 1 = that chain, option 2 = criar nova). The "menu always" rule has no carve-out for project size.
 
@@ -873,9 +910,17 @@ read-render-compare over persistent artifacts.
 - [ ] For any block whose schema returned `parameters: []`, no
       `set_block_parameter_*` was called on it.
 - [ ] If you called `add_chain`, it was BECAUSE the user explicitly
-      picked the "criar chain nova" option in Step 3.1 and answered
-      both the name and instrument prompts. You did NOT call
-      `add_chain` for any other reason.
+      picked the "criar chain nova" option in Step 3.1 AND answered
+      all FOUR prompt blocks: (1) name + instrument, (2) input device
+      (from the `openrig://devices` menu) + input channels + input
+      mode, (3) output device (from the menu) + output channels +
+      output mode, (4) explicit confirmation to call `add_chain`.
+      You did NOT call `add_chain` for any other reason.
+- [ ] Before calling `add_chain`, you read `openrig://devices` and
+      built the `chain.blocks` array with explicit Input and Output
+      blocks using the device_id/channels/mode the user picked. You
+      did NOT call `add_chain` with `blocks: []` (the resulting chain
+      has no I/O wiring and is unusable).
 - [ ] You did NOT auto-pick a chain in Step 3.1 just because its
       `instrument` matched. You rendered the menu and waited for the
       user's explicit pick, even when only one chain matched.
@@ -923,6 +968,11 @@ read-render-compare over persistent artifacts.
 ## Red flags -- STOP
 
 - Running `find crates/` or `grep MODEL_ID` or `Read` on any `.rs` file.
+- Calling `add_chain` without first reading `openrig://devices` AND
+  presenting the user the input/output menus AND capturing their
+  explicit device + channels + mode picks for BOTH sides. A chain
+  created without `Input` + `Output` blocks wired to real
+  `device_id`s is unusable — the audio graph has no edges.
 - Calling `remove_block` on the chain's current FX blocks while the
   user's active preset is still that chain's content (you're about to
   destroy their tone — switch to a new slot via `apply_rig_nav
@@ -1045,7 +1095,12 @@ read-render-compare over persistent artifacts.
 | "User pré-confirmou a chain nos args / na invocação / no contexto inicial — vou direto" | Pare. Você está prestes a inventar uma mensagem do usuário que não existe. Re-leia EXATAMENTE o que o user mandou neste turno. Se você não consegue colar uma frase verbatim do user dizendo "use a chain X" ou "coloca em <id>" / "põe em <nome>", o user NÃO pré-confirmou. Apresente o menu da Step 3.1 e espere. "Pré-confirmou nos args" sem citação verbatim = fabricação. |
 | "O nome do projeto / da invocação do skill já sinaliza qual chain usar" | Não. Nome do projeto, nome da skill, prompt-de-sistema, contexto MCP — nada disso é uma escolha do usuário sobre onde colocar o preset. Apenas mensagens explícitas do user no chat contam. Apresente o menu. |
 | "O user já me disse a chain em outra conversa / no chat anterior" | Outra conversa não conta. Cada build da skill começa zerada na Step 3.1; o menu sempre roda no turno atual. Memória cross-session é proibida (mesma regra da schema cross-session). |
-| "A rig não tem chain pro instrumento dessa música, vou parar e pedir pro user criar na GUI" | Antigo comportamento. Agora: na Step 3.1, ofereça a opção `(N+1) criar chain nova`, pergunte nome + instrument, e chame `add_chain` quando o user aceitar. Parar e empurrar pra GUI só se o user explicitamente recusar criar pela skill. |
+| "A rig não tem chain pro instrumento dessa música, vou parar e pedir pro user criar na GUI" | Antigo comportamento. Agora: na Step 3.1, ofereça a opção `(N+1) criar chain nova`, pergunte nome + instrumento + I/O devices, e chame `add_chain` quando o user aceitar. Parar e empurrar pra GUI só se o user explicitamente recusar criar pela skill. |
+| "Vou chamar `add_chain` só com `instrument` e o engine resolve o resto" | Não resolve. `Chain.blocks` chega vazio → chain sem Input nem Output → audio graph sem onde ler/escrever → chain inútil. Leia `openrig://devices`, ofereça menus, monte o `blocks: [Input, Output]` antes de chamar. |
+| "O user já mencionou o `Scarlett 2i2` antes nesta conversa, vou usar isso" | Memória conversacional não substitui a pergunta atual. Read `openrig://devices` agora; renderize os menus; espere o pick. O user pode ter trocado de interface entre turns. |
+| "Sou esperto, vou inferir o input do `instrument` (mono pra guitar) e default channels=[1] mode=mono" | Convenção razoável é input mono = 1 canal, output stereo = 1,2. Use isso como **sugestão na mensagem** (`"sugiro [1] mono pra guitar input"`). Auto-aplicar sem o user confirmar = decidir o cabling dele. Pergunte sempre. |
+| "Inventei um `device_id` plausível porque a leitura do `openrig://devices` falhou" | Proibido. Se a leitura falhar, STOP e mostra o erro ao user; não chuta. `device_id` é string hard-matched pelo runtime — chute = `add_chain` errors e estado parcial na rig. |
+| "Posso passar `blocks: []` e adicionar Input/Output depois com `add_block`" | Não. O design da skill cria a chain JÁ wired (`Chain.blocks` com Input + Output) num único `add_chain`. Tentar I/O via `add_block` confunde a regra "input/output são wiring do user, não tocar" do Step 3.5/anti-patterns. Monte tudo no `add_chain` payload. |
 | "Step 0a é bookkeeping, o usuário quer o timbre, não uma estrutura de pastas" | Step 0a É parte de entregar o timbre. Sem `<song-slug>/`, a próxima vez que o user pedir pra re-validar contra a mesma ref, você não consegue (Step 8 fica impossível). Bookkeeping é o que torna "o timbre" auditável, portável, e re-comparável — pular = entregar um chute sem evidência. |
 | "Estou num Mac, posso usar `~/.openrig/` direto — é mais curto" | Não. A skill é publicada para todos OS. `~/.openrig/` no Mac é caminho legacy de um project root dev — não é o user-data root. Use `<openrig-user-data-root>` resolvido per OS (macOS → `~/Library/Application Support/OpenRig/`, Linux → `${XDG_CONFIG_HOME:-~/.config}/OpenRig/`, Windows → `%APPDATA%\OpenRig\`). Curto não vale silently quebrar Linux/Windows users. |
 | "Vou renderizar pra `/tmp/` que é mais rápido e copio pra `evaluations/` no final" | Hole na sua memória de curto prazo = perder a evidência. `/tmp/` é wipável. "No final" frequentemente não acontece (timeout, erro, interrupção). Escreva DIRETO em `<openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav` desde a primeira iteração — não há atalho que valha o risco de evidência perdida. |
@@ -1119,13 +1174,31 @@ If the user picked the file-only path in Step −1:
 ## Anti-patterns (all paths)
 
 - ❌ **Calling `add_chain` WITHOUT the user picking "criar chain
-  nova" in Step 3.1 AND answering both name + instrument prompts.**
-  `add_chain` is only legitimate as the explicit Step 3.1 sub-flow
-  result — never to "make a slot for the tone" (that's
-  `apply_rig_nav Preset(-1)`), never to "re-shape" an existing chain,
-  never silently when the user said "preset" generically. Chain ≠
-  slot: a chain is a top-level rig group with its own I/O; a slot is
-  one preset position inside a chain's bank.
+  nova" in Step 3.1 AND answering ALL FOUR prompt blocks (name +
+  instrument; input device + channels + mode; output device +
+  channels + mode; explicit go-ahead).** `add_chain` is only
+  legitimate as the explicit Step 3.1 sub-flow result — never to
+  "make a slot for the tone" (that's `apply_rig_nav Preset(-1)`),
+  never to "re-shape" an existing chain, never silently when the user
+  said "preset" generically. Chain ≠ slot: a chain is a top-level rig
+  group with its own I/O; a slot is one preset position inside a
+  chain's bank.
+- ❌ **Calling `add_chain` with `blocks: []`, or with only an Input
+  but no Output (or vice versa), or with placeholder/inferred
+  device_ids.** A chain without both Input and Output blocks is
+  unusable — the audio graph has nowhere to read from or write to.
+  Always read `openrig://devices` first and use the user's explicit
+  pick for device_id, channels, and mode on both sides.
+- ❌ **Inferring the input/output device from chat history, from the
+  song genre, from the `instrument` tag, or from memory of a prior
+  conversation.** "Provavelmente é a Scarlett porque o user falou
+  dela ontem" = decidir pelo user. Read `openrig://devices` this
+  turn and render the menu, regardless of what was said before.
+- ❌ **Substituting the I/O menus in Step 3.1 with a narrowed "use
+  Scarlett mono 1ch in + Scarlett stereo 1,2 out? (y/n)" ask.** Same
+  anti-pattern as the chain-pick y/n shortcut: it pre-selects what
+  you wanted and hides the alternatives. Render both menus; let the
+  user pick.
 - ❌ **Auto-picking a chain in Step 3.1 because its `instrument`
   matches the song (or because it's the only candidate, or because
   it's the only chain in the project).** Step 3.1 always renders the
