@@ -32,8 +32,10 @@ deterministically. This skill itself never invokes MCP tools or
    `bridge`, `solo` as labels — that requires music-theoretic structure
    this analyzer doesn't measure.
 5. **`match_score` is a technical distance.** When surfacing it in chat,
-   say so: "tecnicamente 0.71 — não é uma medida do quão parecido
-   parece pra ouvido humano."
+   say so explicitly — e.g. "technically 0.71 — this is a measured
+   distance, not a measure of how close it sounds to a human ear."
+   *(Render in the user's language at runtime; this English example
+   documents the framing, not the literal words.)*
 6. **English in code, comments, JSON, summaries.** Chat with the user stays
    in their language; everything persisted to disk is English.
 
@@ -140,7 +142,8 @@ the user. The segmentation `k = ceil(duration_s / 30)` heuristic is
 deliberately conservative — bug reports from real usage are how it gets
 better.
 
-Se o wet for um render através de um DI com intro silencioso (caso comum do
-`input.wav` bundled), section_0 do wet vai ser silêncio. Pinar com
-`--wet-section IDX` apontando pra seção que contém o caráter alvo (use
-`analyze.py wet.wav` pra ver as seções).
+When the wet is a render through a DI that has a silent intro (a common
+case with the bundled `input.wav`), the wet's `section_0` will be
+silence — auto-comparison against that biases the diff. Pin
+`--wet-section IDX` to the section that carries the target tone
+character (run `analyze.py wet.wav` first to see the sections).

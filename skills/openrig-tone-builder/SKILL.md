@@ -29,7 +29,7 @@ The user switches between slots at runtime to swap tones live.
 chain's bank. Examples: "Clocks — Coldplay (rhythm)", "Clocks — Coldplay
 (lead)", "Gravity — John Mayer (solo)". One chain can hold many presets.
 
-> "Procurar pelo preset, não pela chain." Your job is to write a
+> "Look for the preset, not the chain." Your job is to write a
 > **preset**. The chain is just the rig slot it lives in.
 
 This skill **only ever creates or updates presets**. Crucially, it
@@ -83,10 +83,12 @@ Before touching anything, ask **once** which persistence path the user
 wants. Both paths are valid; the right choice depends on whether
 OpenRig is running:
 
-> "Pra esse preset, vou: **(a) via MCP no rig ao vivo** (slot novo na
-> bank, audível na hora — requer OpenRig com `--mcp`), ou **(b) só
-> arquivo YAML** (escrevo em `<openrig-user-data-root>/presets/<name>.yaml`, sem
-> tocar no rig)?"
+> "For this preset, I'll go: **(a) via MCP on the live rig** (new slot
+> in the bank, audible immediately — requires OpenRig with `--mcp`), or
+> **(b) YAML file only** (I'll write to
+> `<openrig-user-data-root>/presets/<name>.yaml`, without touching the
+> rig)?" *(render in the user's language at runtime — this English
+> template documents the structure, not the literal words to ship)*
 
 * If **(a) MCP** — confirm the MCP tools are wired (precondition below)
   and follow the **MCP workflow**.
@@ -254,7 +256,7 @@ values, never the literal string `<Song>` or `<Artist>` or
 
 ## Iteration log
 ### <role>
-| iter | match_score | RMS Δ | centroid Δ | mudança chave |
+| iter | match_score | RMS Δ | centroid Δ | key change    |
 | ---- | ----------- | ----- | ---------- | ------------- |
 | v1   | <score>     | <dB>  | <Hz>       | baseline      |
 | v2   | <score>     | <dB>  | <Hz>       | <key change>  |
@@ -343,14 +345,14 @@ even when explaining why the wet doesn't match the ref):
   `presence`, `loudness`, `spectrum`, `distortion`, `time_fx`. It does
   **not** measure palm-mute, fingerpicking, alternate picking, sweep
   picking, tapping, hybrid picking, arpeggios, chugging, or strumming
-  pattern. Saying "palm-mute pesado" / "fingerpicking limpo" /
-  "arpeggios típicos do Edge" about the user's WAV is **fabrication**
+  pattern. Saying "heavy palm-mute" / "clean fingerpicking" /
+  "typical Edge arpeggios" about the user's WAV is **fabrication**
   unless you can point at a specific waveform or spectrogram detail
   that supports it (and even then, label it "consistent with X", not
   "the WAV is X").
-- Inferring content from the **song title** ("o riff do Metallica
-  obviamente tem palm-mute"), the **artist** ("Edge usa dotted-eighth
-  delay"), the **album/era** ("essa fase do U2 era arpeggio limpo"),
+- Inferring content from the **song title** ("the Metallica riff
+  obviously has palm-mute"), the **artist** ("Edge uses dotted-eighth
+  delay"), the **album/era** ("that U2 phase was clean arpeggios"),
   or **memory of how the song sounds in your head**. The user's WAV is
   what the user's WAV is — it might be a cover, a stem isolated
   imperfectly, a different section than you expect, a live take, or a
@@ -358,33 +360,32 @@ even when explaining why the wet doesn't match the ref):
   *gaps* the fingerprint cannot reveal — gear models, era, recording
   context), NOT in claims about what the reference WAV contains.
 - Inventing differences between the bundled DI and the user's
-  reference to explain a low match_score ("o DI é fingerpicking limpo
-  e o Moisés tocou palm-mute, então a diferença é técnica"). That
-  shifts blame to fabricated technique mismatch instead of admitting
-  the preset's tone gap. If you observe a real gap, name it via
-  fingerprint deltas (`centroid Δ`, `band_energy Δ`, `THD Δ`,
-  `time_fx`) — never via guessed performance differences.
+  reference to explain a low match_score ("the DI is clean
+  fingerpicking and Moisés played palm-mute, so the difference is
+  technique"). That shifts blame to fabricated technique mismatch
+  instead of admitting the preset's tone gap. If you observe a real
+  gap, name it via fingerprint deltas (`centroid Δ`, `band_energy Δ`,
+  `THD Δ`, `time_fx`) — never via guessed performance differences.
 
 **How to phrase claims correctly** — pair every observation with its
 fingerprint citation:
 
-- ✅ "section 2 do ref tem `tone_profile: high_gain` (conf 0.88) e
-  `dynamics_profile: rhythmic` — meu render saiu `crunch` na mesma
-  janela, deficit de THD ~7%."
-- ✅ "não consigo afirmar a técnica do tocador a partir do
-  fingerprint — o analisador não mede palm-mute ou fingerpicking. O
-  que dá pra ver é `dynamics_profile: rhythmic` e onset rate alto."
-- ❌ "o Moisés provavelmente tá tocando palm-mute pesado, por isso o
-  som tá mais comprimido." (Inventou técnica + atribuiu causa sem
-  evidência.)
-- ❌ "o riff do Metallica precisa de palm-mute, então o gap é por
-  causa disso." (Cultural prior sobre Metallica + technique
-  fabrication.)
+- ✅ "section 2 of the ref has `tone_profile: high_gain` (conf 0.88)
+  and `dynamics_profile: rhythmic` — my render came out `crunch` in
+  the same window, THD deficit ~7%."
+- ✅ "I cannot assert the player's technique from the fingerprint —
+  the analyzer does not measure palm-mute or fingerpicking. What I
+  can see is `dynamics_profile: rhythmic` and a high onset rate."
+- ❌ "Moisés is probably playing heavy palm-mute, that's why the
+  sound is more compressed." (Fabricated technique + attributed cause
+  without evidence.)
+- ❌ "the Metallica riff needs palm-mute, so the gap is because of
+  that." (Cultural prior about Metallica + technique fabrication.)
 
 **Red Flag self-check before sending any chat message about the
-reference**: "Estou afirmando que a WAV do user CONTÉM X. Posso colar
-o campo do fingerprint que mostra X? Se não, REWRITE — substitua por
-'o fingerprint mostra Y, então X é especulação' OU corte a frase."
+reference**: "I'm claiming that the user's WAV CONTAINS X. Can I paste
+the fingerprint field that shows X? If not, REWRITE — replace with
+'the fingerprint shows Y, so X is speculation' OR cut the sentence."
 
 **Stem vs mix caveat:** an isolated stem's centroid describes the
 guitar; a full-mix centroid is dominated by drums/bass/keys and is
@@ -535,13 +536,14 @@ How:
 
 2. **For every `MODEL_ID` in the plan, check it's in that set.** "Every" = literally every one, including stock blocks like `compressor_studio_clean`, `gate_basic`, `eq_eight_band_parametric`, `limiter_brickwall`, `volume`, `native_guitar_eq`. The runtime hard-matches on the `id` string regardless of `backend`; narrowing the check to "only NAM/IR captures" is forbidden. For every miss, the user gets ONE clear choice — never make it for them:
 
-   > "Pro [bloco/papel] o capture canônico é `<MODEL_ID>` (do `<amp/cab/...>`), mas ele não está instalado nesta rig.
-   > Como prossigo?
-   > **(a) importar via `openrig:openrig-tone3000-fetch <query>`** — capture autêntico do tone3000.com, mas dispara o fluxo issue → PR → qa_audit/pack_plugins (pesado).
-   > **(b) substituir** por `<closest_installed_MODEL_ID>` (`<display_name>`, mesmo `block_type`) — rápido, mas é um *palpite no timbre*, não O timbre.
-   > Default sugerido: **(a)** quando você pediu um amp/música específico; **(b)** quando você está só esboçando."
+   > "For the [block/role] the canonical capture is `<MODEL_ID>` (from `<amp/cab/...>`), but it is not installed on this rig.
+   > How do I proceed?
+   > **(a) import via `openrig:openrig-tone3000-fetch <query>`** — authentic capture from tone3000.com, but triggers the issue → PR → qa_audit/pack_plugins flow (heavy).
+   > **(b) substitute** with `<closest_installed_MODEL_ID>` (`<display_name>`, same `block_type`) — fast, but it is a *guess at the tone*, not THE tone.
+   > Suggested default: **(a)** when you asked for a specific amp/song; **(b)** when you are only sketching."
+   > *(render in the user's language at runtime — this English template documents the structure, not the literal words to ship)*
 
-   The "Default sugerido" line is what you **recommend TO the user inside the ask message** — it is NOT a self-applied default. You always wait for the user's explicit answer. Auto-classifying the request as "just sketching" and applying (b) without sending the ask is the silent substitution this step forbids. If the user does not answer, ask once more or stop; never decide for them.
+   The "Suggested default" line is what you **recommend TO the user inside the ask message** — it is NOT a self-applied default. You always wait for the user's explicit answer. Auto-classifying the request as "just sketching" and applying (b) without sending the ask is the silent substitution this step forbids. If the user does not answer, ask once more or stop; never decide for them.
 
 3. **Apply the user's choice before resuming the build:**
    - **(a) import** → invoke `openrig:openrig-tone3000-fetch` with the relevant search term (artist, amp model, capture name). After the fetch skill lands the file under `OpenRig-plugins` AND clears the qa_audit/pack_plugins gate, the user's OpenRig instance must reload its catalog (`reload_plugin_catalog` MCP tool) before the new `MODEL_ID` appears in `openrig://plugins`. Re-read `openrig://plugins` to confirm presence before calling `add_block`.
@@ -599,23 +601,24 @@ Steps:
    different name (e.g. append ` (v2)` / the date), or **show plan
    only**. Never overwrite without confirmation.
 
-1. **Read `openrig://project` and ALWAYS ask the user where to put this preset.** List every chain in the project with its id, display name, `instrument`, and a short summary of its current blocks. Build a numbered menu — **including when only one chain matches the song's instrument** — and add a final "criar chain nova" option. Do NOT auto-pick. The shape (replace with real chains from the project read; do NOT echo example chain names from this skill text):
+1. **Read `openrig://project` and ALWAYS ask the user where to put this preset.** List every chain in the project with its id, display name, `instrument`, and a short summary of its current blocks. Build a numbered menu — **including when only one chain matches the song's instrument** — and add a final "create new chain" option. Do NOT auto-pick. The shape (replace with real chains from the project read; do NOT echo example chain names from this skill text):
 
-   > "Onde quer colocar o preset?
-   > **(1)** chain `<id>` ('<display name>', instrument `<x>`, blocos atuais: `<short summary>`)
+   > "Where do you want to put this preset?
+   > **(1)** chain `<id>` ('<display name>', instrument `<x>`, current blocks: `<short summary>`)
    > **(2)** chain `<id>` ('<display name>', instrument `<y>`, ...)
    > ...
-   > **(N+1) criar chain nova** — eu pergunto nome + instrumento + I/O devices e chamo `add_chain`."
+   > **(N+1) create new chain** — I'll ask for name + instrument + I/O devices and call `add_chain`."
+   > *(render in the user's language at runtime — this English template documents the structure, not the literal words to ship)*
 
-   You MAY recommend one option in the ask message (e.g. "sugiro **(1)** porque o `instrument` bate com o estilo da música"), but you **MUST wait for the user's explicit pick**. Auto-selecting because "só uma chain bate com o instrumento" is forbidden — that is the deterministic "marreta" behaviour this step exists to prevent.
+   You MAY recommend one option in the ask message (e.g. "I recommend **(1)** because the `instrument` matches the song's style"), but you **MUST wait for the user's explicit pick**. Auto-selecting because "only one chain matches the instrument" is forbidden — that is the deterministic auto-pick behaviour this step exists to prevent.
 
-   **If the user picks `(N+1) criar chain nova`**, sub-flow:
+   **If the user picks `(N+1) create new chain`**, sub-flow:
 
    1. **Name + instrument prompts.** Ask the user the **chain name** (free text, e.g. "Lead Solos", "Rhythm — Drop D", "Clean Acoustic") **AND** the **`instrument`** tag (`electric_guitar` / `acoustic_guitar` / `bass_guitar` / etc.) in the same ask, OR one after the other if you must. If the user answers only one of the two, **re-ask the missing one explicitly**. Never infer the instrument from the song or from the chain name.
 
    2. **Read `openrig://devices` and present I/O menus.** A chain without an Input block and an Output block is unusable (the `add_chain` schema's `Chain.blocks` requires at least one of each for the audio graph to wire). Read the resource ONCE, **immediately before** the menus — not minutes earlier and not in a prior turn. The device list is a snapshot at read time; if the user mentions replugging an interface between the menu and the `add_chain` call, re-read `openrig://devices` and restart this sub-step. Render TWO numbered menus — one for input, one for output — using the actual `<label>` + `device_id` strings the resource returned (do NOT echo example device names from this skill text or memory of a prior conversation):
 
-      > "Input device pra essa chain?
+      > "Input device for this chain?
       > **(1)** `<input label 1>` (`<device_id 1>`)
       > **(2)** `<input label 2>` (`<device_id 2>`)
       > ...
@@ -624,8 +627,9 @@ Steps:
       > **(1)** `<output label 1>` (`<device_id 1>`)
       > **(2)** `<output label 2>` (`<device_id 2>`)
       > ..."
+      > *(render in the user's language at runtime — this English template documents the structure, not the literal words to ship)*
 
-      You MAY recommend one input (e.g. "sugiro o Scarlett porque parece ser a interface principal") and one output, but you MUST wait for the user's explicit pick on each. Even when the rig has only one input or one output device, render the menu — same rule as the chain pick. Y/n shortcut is forbidden.
+      You MAY recommend one input (e.g. "I recommend the Scarlett because it looks like the main interface") and one output, but you MUST wait for the user's explicit pick on each. Even when the rig has only one input or one output device, render the menu — same rule as the chain pick. Y/n shortcut is forbidden.
 
    3. **Channels + mode prompts.** For each chosen device, ask the user the **channel list** (e.g. `[1]` for mono guitar input on channel 1, `[1, 2]` for stereo L/R) AND the **mode** (`mono` / `stereo` / `dual_mono` for inputs; `mono` / `stereo` for outputs). You MAY suggest a sensible default per `instrument` tag (e.g. mono guitar input usually = single channel + `mono`; stereo output usually = channels 1,2 + `stereo`), but the suggestion goes IN the ask, not as a self-applied default. If the user does not answer all four (in-device, in-channels+mode, out-device, out-channels+mode), re-ask the missing ones explicitly.
 
@@ -652,13 +656,13 @@ Steps:
 
    5. **Continue the preset build into the new chain id.**
 
-   **If `openrig://project` returns ZERO chains**, you may go straight to the create-new sub-flow (still asking name + instrument + I/O devices + channels/mode), but say out loud "sua rig não tem chains ainda — vou criar uma" so the user knows. Don't render an empty menu.
+   **If `openrig://project` returns ZERO chains**, you may go straight to the create-new sub-flow (still asking name + instrument + I/O devices + channels/mode), but say out loud "your rig has no chains yet — I'll create one" so the user knows. Don't render an empty menu.
 
-   **If `openrig://project` returns exactly ONE chain**, you still render the menu (option 1 = that chain, option 2 = criar nova). The "menu always" rule has no carve-out for project size.
+   **If `openrig://project` returns exactly ONE chain**, you still render the menu (option 1 = that chain, option 2 = create new). The "menu always" rule has no carve-out for project size.
 
    **If the user does not answer**, ask once more or stop. Never decide for them.
 
-   **Forbidden short-form ask:** rendering a single-line "use `<chain>`? (y/n)" instead of the full numbered menu is the same anti-pattern as auto-picking — it pre-selects the option you wanted and hides the alternatives (other chains + criar nova). Always render the full menu; the "y/n shortcut" is forbidden even when only one chain matches the instrument.
+   **Forbidden short-form ask:** rendering a single-line "use `<chain>`? (y/n)" instead of the full numbered menu is the same anti-pattern as auto-picking — it pre-selects the option you wanted and hides the alternatives (other chains + create new). Always render the full menu; the "y/n shortcut" is forbidden even when only one chain matches the instrument.
 
 2. **Decide the preset name** as
    `"<Song> — <Artist> (<role>)"` (e.g. `"Clocks — Coldplay (rhythm)"`,
@@ -984,7 +988,7 @@ read-render-compare over persistent artifacts.
 - [ ] For any block whose schema returned `parameters: []`, no
       `set_block_parameter_*` was called on it.
 - [ ] If you called `add_chain`, it was BECAUSE the user explicitly
-      picked the "criar chain nova" option in Step 3.1 AND answered
+      picked the "create new chain" option in Step 3.1 AND answered
       all FOUR prompt blocks: (1) name + instrument, (2) input device
       (from the `openrig://devices` menu) + input channels + input
       mode, (3) output device (from the menu) + output channels +
@@ -1042,9 +1046,9 @@ read-render-compare over persistent artifacts.
 ## Red flags -- STOP
 
 - Running `find crates/` or `grep MODEL_ID` or `Read` on any `.rs` file.
-- Saying "vou persistir essa regra na memory" / "vou salvar isso pra
-  não repetir" / "I'll remember this for next time" / proposing any
-  write to `~/.claude/projects/*/memory/` to capture a user
+- Saying "I'll persist this rule in memory" / "I'll save this so I
+  don't repeat it" / "I'll remember this for next time" / proposing
+  any write to `~/.claude/projects/*/memory/` to capture a user
   correction. **Corrections never go to local memory.** Local memory
   is per-machine, per-user, doesn't ship with the plugin, isn't
   reviewed, isn't versioned — the next contributor / next install /
@@ -1061,11 +1065,11 @@ read-render-compare over persistent artifacts.
   fabrication, even when the song or artist makes it "obvious". See
   **Step 0 HARD RULE — no suppositions**.
 - Inventing a difference between the bundled DI and the user's
-  reference to explain a low match_score ("o DI é fingerpicking
-  limpo, o Moisés tocou palm-mute"). Name real fingerprint deltas
-  (`centroid Δ`, `band_energy Δ`, `THD Δ`, `time_fx`), never guessed
-  performance differences. The gap is in the **preset**, not in
-  invented technique.
+  reference to explain a low match_score ("the DI is clean
+  fingerpicking, Moisés played palm-mute"). Name real fingerprint
+  deltas (`centroid Δ`, `band_energy Δ`, `THD Δ`, `time_fx`), never
+  guessed performance differences. The gap is in the **preset**, not
+  in invented technique.
 - Using song-title / artist / era / genre knowledge as evidence about
   what's in THIS WAV. The user may have sent a cover, a different
   section, a live take, a remix, or a stem isolated imperfectly.
@@ -1093,13 +1097,13 @@ read-render-compare over persistent artifacts.
   `save_chain_preset`).
 - Writing a YAML preset file to disk *without* the user having picked
   the file-only path in Step −1.
-- Reporting "preset salvo" / "preset saved" / "done" to the user
-  WITHOUT having run at least one render→compare cycle when any
-  reference audio exists. **This is the failure mode the user called
-  out explicitly**: "ta faltando a coisa mais importante. vc deveria
-  rodar o render". If you reach `save_chain_preset` and have not yet
-  rendered, you have NOT validated the preset — you have saved a
-  guess. Restart from Step 6.
+- Reporting "preset saved" / "done" to the user WITHOUT having run at
+  least one render→compare cycle when any reference audio exists.
+  **This is the failure mode the user called out explicitly**: "you're
+  missing the most important thing. you should run the render". If
+  you reach `save_chain_preset` and have not yet rendered, you have
+  NOT validated the preset — you have saved a guess. Restart from
+  Step 6.
 - Asking the user for a DI WAV file. **You don't.** The DI is bundled
   at `<openrig-source-root>/assets/audio/input.wav`. Only the *wet
   reference stem* comes from the user.
@@ -1189,45 +1193,45 @@ read-render-compare over persistent artifacts.
 | "I'll research first to know what to look for, then fingerprint" | Wrong order. Research without the fingerprint is theater — you bias toward what "sounds right on paper". Step 0 (fingerprint) comes before Step 1 (research). |
 | "The user gave me WAVs but I already know the song, fingerprint is redundant" | The WAVs are the user's reference take, not the song you remember. Era, mix, performance and the user's playing all shift the fingerprint. Run Step 0. |
 | "I'll fingerprint just one stem and reuse it for the other role" | Rhythm and lead have different gain stages, different time effects, different EQs. Fingerprint **each** WAV — that's what produces the role-specific presets the skill promises. |
-| "`tone3000-fetch` é pesado (issue → PR → qa_audit gate), vou só substituir" | Custo é decisão do usuário, não sua. Surface o trade (a)/(b) na **Step 2.5** e deixa o user escolher. Decidir por ele = decidir que o timbre não importa — mas ele pediu O timbre, não UM timbre. |
-| "O capture mais próximo já instalado é 'close enough'" | "Close enough" é o julgamento do usuário, não seu. Pergunte em **Step 2.5** ANTES de substituir. Step 5 provenance documenta substituições autorizadas; não autoriza retroativamente as suas. |
-| "`blocks-reference.md` lista esse `MODEL_ID`, então posso chamar `add_block`" | O doc lista o que o projeto SABE carregar. `openrig://plugins` lista o que ESTA rig tem carregado. Os dois divergem — sempre cheque o segundo na **Step 2.5**. |
-| "Vou grepar `blocks-reference.md` por `vox ac30` / `streets` / `u2` pra achar o `MODEL_ID` mais rápido" | NÃO. Isso é discovery. Discovery é `openrig://plugins` SEMPRE. O doc é consultado DEPOIS, por `MODEL_ID`, pra recipe (knob values, pairings). Greping o doc por marca de amp, música ou artista = uso errado. Comportamento já corrigido várias vezes nesta conversa — não repita. |
-| "O doc tem uma seção sobre U2 / Edge / Coldplay, vou começar por lá" | A seção é recipe (knob settings, pairings) — útil DEPOIS que você tem o `MODEL_ID` via `openrig://plugins`. Começar pelo doc inverte a ordem e silenciosamente ignora plugins instalados que não estão no doc. Step 2 HARD GATE: plugins primeiro, doc depois. |
-| "Tenho strong prior do timbre, vou direto pro doc confirmar" | "Strong prior" não substitui a leitura de `openrig://plugins`. O usuário pode ter um plugin instalado que bate melhor com o prior do que o que está documentado. Step 2 sub-step 1 (read `openrig://plugins`) é incondicional. |
-| "O Moisés tá tocando palm-mute no Metallica, então o ref vai ter palm-mute pesado" | NÃO. Você não sabe o que tem no ref antes de ler o fingerprint. Cultural prior (música/artista/era) NÃO é evidência sobre ESTA WAV específica. O analisador não mede palm-mute. Diga "o fingerprint mostra `dynamics_profile: rhythmic` e `tone_profile: high_gain`" — não fabrique técnica. |
-| "Vou explicar o gap entre wet e ref como 'a performance é diferente' (DI fingerpicking vs Moisés palm-mute)" | Inventar diferença de performance pra justificar match_score baixo = mover a culpa do preset pra uma fabricação. O gap real é o que os campos `Δ` do diff mostram (centroid, band_energy, THD, time_fx). Cite os deltas — não invente técnica. |
-| "Edge usa dotted-eighth delay, então o ref do Streets vai ter delay com mix alto" | "Edge usa" é prior cultural pra Step 1 (research que mapeia gear). Sobre ESTA WAV, só o fingerprint fala: olhe `time_fx.delay_present` / `delay_time_ms_estimate` / `delay_feedback_estimate_pct`. Se o fingerprint não mostra delay, o ref não tem delay nessa seção — independente do que o Edge faz. |
-| "A música é Metallica, então o tom é high_gain óbvio — pulo o fingerprint" | Step 0 é incondicional. WAV pode ser cover, take diferente, mix limpo, ou um take antes do dist ligar. Você LÊ o fingerprint, sempre. "Óbvio" + cultural prior = exatamente a falha que essa skill existe pra bloquear. |
-| "O user me corrigiu — vou salvar essa lição na memory pra não repetir" | NÃO. Memory local (`~/.claude/projects/*/memory/`) é per-machine, per-user, não viaja com o plugin. Correção vira edit no `SKILL.md` (esta skill) OU no `CLAUDE.md` do projeto. Se o user corrige um comportamento da skill, o fix é literalmente ESTA frase aqui — adicione uma Red Flag, uma Rationalization, ou um sub-step que bloqueie o comportamento. Memory ≠ persistência. |
-| "Vou propor pro user que ele guarde isso na memory dele pra próxima sessão" | Pior ainda — você terceiriza pro user uma decisão que é responsabilidade da skill. Se a correção é válida, ela já é parte do contrato da skill — vai pro `SKILL.md`. Nada de empurrar a manutenção pro local-storage do user. |
-| "O usuário pediu o preset, fetchar capture é fora de escopo da tone-builder" | Fora de escopo seria dispatch direto; a Step 2.5 só OFERECE o fetch como (a) e delega à `openrig-tone3000-fetch` quando o user aceita. Não oferecer = decidir pelo (b) escondido. |
-| "Vou deixar o `add_block` falhar e aí rodo Step 2.5 quando descobrir o erro" | Wrong order. 2.5 é **precondition** pra Step 3, não recovery. O error path polui o log, deixa estado parcial na chain e contorna a pergunta (a)/(b). Leia `openrig://plugins` PRIMEIRO. |
-| "Os blocos stock (`compressor_*`, `gate_basic`, `limiter_brickwall`) são built-in, óbvio que estão instalados — checo só os NAM/IR" | A Step 2.5 diz **for every `MODEL_ID`**. Stock pode estar desabilitado em builds custom, renomeado entre versões, ou ausente em forks. O custo do cross-check é uma leitura de resource — não vale a pena economizar. |
-| "Eu lembro o path desse param do amp similar (`bass`, `gain`, etc.) — não preciso ler `openrig://plugins/{id}/params`" | Memória mata. Plugins diferentes na mesma família usam paths diferentes (dotted vs flat, prefixos distintos, knobs ausentes). `set_block_parameter_number` com path errado falha em silêncio. Leia o schema dinâmico — uma leitura de resource por `MODEL_ID`. |
-| "`blocks-reference.md` lista os params desse amp, então tá schema suficiente" | O doc é a fonte de *recipes* (qual valor escolher dentro do range válido), não de schema. Schema autoritativo é `openrig://plugins/{id}/params` — runtime, não pode estar stale. O doc pode estar drift. |
-| "Vou inferir o tool (`_number` vs `_bool`) pelo nome do param" | O `domain` da schema decide, não o nome. Mesmo param chamado `bias` pode ser `FloatRange` (knob) num plugin e `Bool` (switch) noutro. Leia `domain`. |
-| "Vou cachear o schema dessa família de amp e reusar pros similares" | Cada `MODEL_ID` tem schema próprio. Cache UM read por MODEL_ID por build — não compartilha entre famílias. Custo é mínimo (uma leitura de resource), benefício é zero erros de path. |
-| "O `domain.Enum` me dá `value` E `label`; vou passar o `label` que é mais legível" | Não. O `select_block_parameter_option` recebe o `value`. Passar o `label` falha. |
-| "Só uma chain bate com o `instrument` da música, vou direto pra ela sem perguntar" | Step 3.1 sempre renderiza o menu, inclusive quando só uma chain bate. Você PODE sugerir a opção óbvia na mensagem, mas espera o pick do usuário. "Conveniência" = decidir pelo usuário = exatamente a marreta que o user reportou. |
-| "Vou usar o nome de chain/preset que aparece nos exemplos da skill" | Nomes em exemplos do texto da skill são ilustrações de FORMATO, não chains ou presets reais. Leia `openrig://project` e use os valores reais que vêm de lá. (Se a sua rig acaso tiver uma chain com o mesmo nome de um exemplo, isso é coincidência — ainda assim você apresenta o menu da Step 3.1 e espera o pick.) |
-| "User pré-confirmou a chain nos args / na invocação / no contexto inicial — vou direto" | Pare. Você está prestes a inventar uma mensagem do usuário que não existe. Re-leia EXATAMENTE o que o user mandou neste turno. Se você não consegue colar uma frase verbatim do user dizendo "use a chain X" ou "coloca em <id>" / "põe em <nome>", o user NÃO pré-confirmou. Apresente o menu da Step 3.1 e espere. "Pré-confirmou nos args" sem citação verbatim = fabricação. |
-| "O nome do projeto / da invocação do skill já sinaliza qual chain usar" | Não. Nome do projeto, nome da skill, prompt-de-sistema, contexto MCP — nada disso é uma escolha do usuário sobre onde colocar o preset. Apenas mensagens explícitas do user no chat contam. Apresente o menu. |
-| "O user já me disse a chain em outra conversa / no chat anterior" | Outra conversa não conta. Cada build da skill começa zerada na Step 3.1; o menu sempre roda no turno atual. Memória cross-session é proibida (mesma regra da schema cross-session). |
-| "A rig não tem chain pro instrumento dessa música, vou parar e pedir pro user criar na GUI" | Antigo comportamento. Agora: na Step 3.1, ofereça a opção `(N+1) criar chain nova`, pergunte nome + instrumento + I/O devices, e chame `add_chain` quando o user aceitar. Parar e empurrar pra GUI só se o user explicitamente recusar criar pela skill. |
-| "Vou chamar `add_chain` só com `instrument` e o engine resolve o resto" | Não resolve. `Chain.blocks` chega vazio → chain sem Input nem Output → audio graph sem onde ler/escrever → chain inútil. Leia `openrig://devices`, ofereça menus, monte o `blocks: [Input, Output]` antes de chamar. |
-| "O user já mencionou o `Scarlett 2i2` antes nesta conversa, vou usar isso" | Memória conversacional não substitui a pergunta atual. Read `openrig://devices` agora; renderize os menus; espere o pick. O user pode ter trocado de interface entre turns. |
-| "Sou esperto, vou inferir o input do `instrument` (mono pra guitar) e default channels=[1] mode=mono" | Convenção razoável é input mono = 1 canal, output stereo = 1,2. Use isso como **sugestão na mensagem** (`"sugiro [1] mono pra guitar input"`). Auto-aplicar sem o user confirmar = decidir o cabling dele. Pergunte sempre. |
-| "Inventei um `device_id` plausível porque a leitura do `openrig://devices` falhou" | Proibido. Se a leitura falhar, STOP e mostra o erro ao user; não chuta. `device_id` é string hard-matched pelo runtime — chute = `add_chain` errors e estado parcial na rig. |
-| "Posso passar `blocks: []` e adicionar Input/Output depois com `add_block`" | Não. O design da skill cria a chain JÁ wired (`Chain.blocks` com Input + Output) num único `add_chain`. Tentar I/O via `add_block` confunde a regra "input/output são wiring do user, não tocar" do Step 3.5/anti-patterns. Monte tudo no `add_chain` payload. |
-| "Step 0a é bookkeeping, o usuário quer o timbre, não uma estrutura de pastas" | Step 0a É parte de entregar o timbre. Sem `<song-slug>/`, a próxima vez que o user pedir pra re-validar contra a mesma ref, você não consegue (Step 8 fica impossível). Bookkeeping é o que torna "o timbre" auditável, portável, e re-comparável — pular = entregar um chute sem evidência. |
-| "Estou num Mac, posso usar `~/.openrig/` direto — é mais curto" | Não. A skill é publicada para todos OS. `~/.openrig/` no Mac é caminho legacy de um project root dev — não é o user-data root. Use `<openrig-user-data-root>` resolvido per OS (macOS → `~/Library/Application Support/OpenRig/`, Linux → `${XDG_CONFIG_HOME:-~/.config}/OpenRig/`, Windows → `%APPDATA%\OpenRig\`). Curto não vale silently quebrar Linux/Windows users. |
-| "Vou renderizar pra `/tmp/` que é mais rápido e copio pra `evaluations/` no final" | Hole na sua memória de curto prazo = perder a evidência. `/tmp/` é wipável. "No final" frequentemente não acontece (timeout, erro, interrupção). Escreva DIRETO em `<openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav` desde a primeira iteração — não há atalho que valha o risco de evidência perdida. |
-| "Passar o path original do ref pro `compare.py` é o mesmo que passar a cópia em `refs/`" | Não. O path original pode mover, ser deletado, ou estar num drive desmontado quando o user pedir re-eval. A cópia em `refs/<role>.wav` é imutável (sha256-verificada) e é o que TODAS as iterações + Step 8 comparam — todos os scores precisam tracear pra ela. Sempre use o path persistente. |
-| "Symlink em vez de `cp` pro `refs/` economiza disco" | Economiza disco, quebra portabilidade. `tar czf backup.tgz <openrig-evaluations-root>/` precisa funcionar e produzir um arquivo auto-contido. Symlink quebra na hora do `tar` (vira link relativo) ou na hora do extract em outra máquina. Sempre `cp`. |
-| "Vou updatar `eval.md` só no final, com todas as iterações de uma vez" | Não. As linhas interim são a evolução do score — sem elas você não consegue mostrar pro user por que a v4 ganhou da v2. Append linha por iteração, no final do Step 5 de cada loop. |
-| "Já existe `<openrig-evaluations-root>/<song-slug>/` de um build anterior — vou `rm -rf` pra começar limpo" | Não. Isso apaga a auditoria do user. Leia `eval.md`, continue a numeração de iteração depois do último `<role>-v<N>`, e mantenha os YAMLs antigos como histórico. Só apague se o user explicitamente pedir. |
-| "Os placeholders `<Song>` `<Artist>` `<chain id>` no template do `eval.md` são literais — escrevo como estão" | Não. Placeholders na SKILL.md são marcadores de slot — você substitui pelos valores reais do build (título da música real, artista real, chain id real lido de `openrig://project`). Se o `eval.md` final na pasta do user contém literalmente `<Song>` ou `<Artist>`, você não fez o build, você ecoou o template. |
+| "`tone3000-fetch` is heavy (issue → PR → qa_audit gate), I'll just substitute" | Cost is the user's decision, not yours. Surface the (a)/(b) trade in **Step 2.5** and let the user choose. Deciding for them = deciding that the tone doesn't matter — but they asked for THE tone, not A tone. |
+| "The closest already-installed capture is 'close enough'" | "Close enough" is the user's judgment, not yours. Ask in **Step 2.5** BEFORE substituting. Step 5 provenance documents authorized substitutions; it does not retroactively authorize yours. |
+| "`blocks-reference.md` lists this `MODEL_ID`, so I can call `add_block`" | The doc lists what the project KNOWS how to load. `openrig://plugins` lists what THIS rig actually has loaded. The two diverge — always check the second one in **Step 2.5**. |
+| "I'll grep `blocks-reference.md` for `vox ac30` / `streets` / `u2` to find the `MODEL_ID` faster" | NO. That's discovery. Discovery is `openrig://plugins` ALWAYS. The doc is consulted AFTER, by `MODEL_ID`, for recipe (knob values, pairings). Greping the doc by amp brand, song or artist = wrong use. Behaviour already corrected several times in this conversation — do not repeat. |
+| "The doc has a section about U2 / Edge / Coldplay, I'll start there" | The section is recipe (knob settings, pairings) — useful AFTER you have the `MODEL_ID` via `openrig://plugins`. Starting from the doc inverts the order and silently ignores installed plugins that are not in the doc. Step 2 HARD GATE: plugins first, doc after. |
+| "I have a strong prior on the tone, I'll go straight to the doc to confirm" | "Strong prior" does not replace reading `openrig://plugins`. The user may have an installed plugin that matches the prior better than what's documented. Step 2 sub-step 1 (read `openrig://plugins`) is unconditional. |
+| "Moisés is playing palm-mute on Metallica, so the ref will have heavy palm-mute" | NO. You don't know what's in the ref before reading the fingerprint. Cultural prior (song/artist/era) is NOT evidence about THIS specific WAV. The analyzer does not measure palm-mute. Say "the fingerprint shows `dynamics_profile: rhythmic` and `tone_profile: high_gain`" — don't fabricate technique. |
+| "I'll explain the gap between wet and ref as 'the performance is different' (DI fingerpicking vs Moisés palm-mute)" | Inventing a performance difference to justify a low match_score = moving the blame from the preset onto a fabrication. The real gap is what the diff's `Δ` fields show (centroid, band_energy, THD, time_fx). Cite the deltas — don't invent technique. |
+| "Edge uses dotted-eighth delay, so the Streets ref will have delay with high mix" | "Edge uses" is a cultural prior for Step 1 (research that maps gear). About THIS WAV, only the fingerprint speaks: look at `time_fx.delay_present` / `delay_time_ms_estimate` / `delay_feedback_estimate_pct`. If the fingerprint shows no delay, the ref has no delay in that section — regardless of what Edge does. |
+| "The song is Metallica, so the tone is obviously high_gain — I'll skip the fingerprint" | Step 0 is unconditional. The WAV could be a cover, a different take, a clean mix, or a take before the dist was switched on. You READ the fingerprint, always. "Obvious" + cultural prior = exactly the failure this skill exists to block. |
+| "The user corrected me — I'll save this lesson to memory so I don't repeat it" | NO. Local memory (`~/.claude/projects/*/memory/`) is per-machine, per-user, doesn't travel with the plugin. A correction becomes an edit in `SKILL.md` (this skill) OR in the project's `CLAUDE.md`. If the user corrects a skill behavior, the fix is literally THIS sentence here — add a Red Flag, a Rationalization, or a sub-step that blocks the behavior. Memory ≠ persistence. |
+| "I'll suggest to the user that they save this in their memory for next session" | Even worse — you outsource to the user a decision that is the skill's responsibility. If the correction is valid, it's already part of the skill's contract — it goes into `SKILL.md`. No pushing maintenance onto the user's local storage. |
+| "The user asked for the preset, fetching a capture is out of scope for tone-builder" | Out of scope would be direct dispatch; Step 2.5 only OFFERS the fetch as (a) and delegates to `openrig-tone3000-fetch` when the user accepts. Not offering = silently deciding for (b). |
+| "I'll let `add_block` fail and then run Step 2.5 when I discover the error" | Wrong order. 2.5 is a **precondition** for Step 3, not recovery. The error path pollutes the log, leaves partial state in the chain, and bypasses the (a)/(b) question. Read `openrig://plugins` FIRST. |
+| "Stock blocks (`compressor_*`, `gate_basic`, `limiter_brickwall`) are built-in, obviously installed — I'll only check the NAM/IR ones" | Step 2.5 says **for every `MODEL_ID`**. Stock can be disabled in custom builds, renamed across versions, or absent in forks. The cost of the cross-check is one resource read — not worth saving. |
+| "I remember the path of this param from a similar amp (`bass`, `gain`, etc.) — I don't need to read `openrig://plugins/{id}/params`" | Memory kills. Different plugins in the same family use different paths (dotted vs flat, distinct prefixes, missing knobs). `set_block_parameter_number` with the wrong path fails silently. Read the dynamic schema — one resource read per `MODEL_ID`. |
+| "`blocks-reference.md` lists this amp's params, so that's schema enough" | The doc is the *recipes* source (which value to pick within the valid range), not the schema. Authoritative schema is `openrig://plugins/{id}/params` — runtime, cannot be stale. The doc can drift. |
+| "I'll infer the tool (`_number` vs `_bool`) from the param's name" | The schema's `domain` decides, not the name. The same param called `bias` could be `FloatRange` (knob) on one plugin and `Bool` (switch) on another. Read `domain`. |
+| "I'll cache the schema for this amp family and reuse it for similar ones" | Each `MODEL_ID` has its own schema. Cache ONE read per MODEL_ID per build — don't share across families. Cost is minimal (one resource read), benefit is zero path errors. |
+| "The `domain.Enum` gives me `value` AND `label`; I'll pass the `label` which is more readable" | No. `select_block_parameter_option` takes the `value`. Passing the `label` fails. |
+| "Only one chain matches the song's `instrument`, I'll go straight to it without asking" | Step 3.1 always renders the menu, even when only one chain matches. You MAY suggest the obvious option in the message, but wait for the user's pick. "Convenience" = deciding for the user = exactly the auto-pick the user reported. |
+| "I'll use the chain/preset name from the skill's examples" | Names in the skill text's examples are FORMAT illustrations, not real chains or presets. Read `openrig://project` and use the actual values from there. (If your rig happens to have a chain with the same name as an example, that's coincidence — you still present the Step 3.1 menu and wait for the pick.) |
+| "User pre-confirmed the chain in the args / in the invocation / in the initial context — I'll go straight in" | Stop. You're about to invent a user message that doesn't exist. Re-read EXACTLY what the user sent this turn. If you cannot paste a verbatim sentence from the user saying "use chain X" or "put it in <id>" / "put it in <name>", the user did NOT pre-confirm. Present the Step 3.1 menu and wait. "Pre-confirmed in args" without verbatim quote = fabrication. |
+| "The project name / the skill invocation already signals which chain to use" | No. Project name, skill name, system prompt, MCP context — none of that is the user's choice about where to put the preset. Only explicit user messages in chat count. Present the menu. |
+| "The user already told me the chain in another conversation / in a previous chat" | Another conversation doesn't count. Every build of the skill starts fresh at Step 3.1; the menu always runs in the current turn. Cross-session memory is forbidden (same rule as cross-session schema). |
+| "The rig has no chain for the instrument of this song, I'll stop and ask the user to create one in the GUI" | Old behavior. Now: in Step 3.1, offer the `(N+1) create new chain` option, ask for name + instrument + I/O devices, and call `add_chain` when the user accepts. Stop and push to the GUI only if the user explicitly refuses to create through the skill. |
+| "I'll call `add_chain` with just `instrument` and the engine resolves the rest" | It doesn't resolve. `Chain.blocks` arrives empty → chain with no Input or Output → audio graph with nowhere to read/write → useless chain. Read `openrig://devices`, offer menus, build `blocks: [Input, Output]` before calling. |
+| "The user already mentioned the `Scarlett 2i2` earlier in this conversation, I'll use that" | Conversational memory does not replace the current ask. Read `openrig://devices` now; render the menus; wait for the pick. The user may have swapped interfaces between turns. |
+| "I'm clever, I'll infer the input from the `instrument` (mono for guitar) and default channels=[1] mode=mono" | A reasonable convention is mono input = 1 channel, stereo output = 1,2. Use that as a **suggestion in the message** (`"I recommend [1] mono for guitar input"`). Auto-applying without the user confirming = deciding their cabling. Always ask. |
+| "I invented a plausible `device_id` because the `openrig://devices` read failed" | Forbidden. If the read fails, STOP and show the error to the user; don't guess. `device_id` is a hard-matched string in the runtime — a guess = `add_chain` errors and partial state in the rig. |
+| "I can pass `blocks: []` and add Input/Output later with `add_block`" | No. The skill's design creates the chain ALREADY wired (`Chain.blocks` with Input + Output) in a single `add_chain`. Trying I/O via `add_block` conflicts with the "input/output are user wiring, don't touch" rule from Step 3.5/anti-patterns. Build everything in the `add_chain` payload. |
+| "Step 0a is bookkeeping, the user wants the tone, not a folder structure" | Step 0a IS part of delivering the tone. Without `<song-slug>/`, the next time the user asks to re-validate against the same ref, you can't (Step 8 becomes impossible). Bookkeeping is what makes "the tone" auditable, portable, and re-comparable — skipping = delivering a guess with no evidence. |
+| "I'm on a Mac, I can use `~/.openrig/` directly — it's shorter" | No. The skill is published for all OSes. `~/.openrig/` on Mac is a legacy dev project root path — it is not the user-data root. Use `<openrig-user-data-root>` resolved per OS (macOS → `~/Library/Application Support/OpenRig/`, Linux → `${XDG_CONFIG_HOME:-~/.config}/OpenRig/`, Windows → `%APPDATA%\OpenRig\`). Shorter is not worth silently breaking Linux/Windows users. |
+| "I'll render to `/tmp/` which is faster and copy to `evaluations/` at the end" | A hole in your short-term memory = losing the evidence. `/tmp/` is wipeable. "At the end" often doesn't happen (timeout, error, interruption). Write DIRECTLY to `<openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav` from the first iteration — there's no shortcut worth the risk of lost evidence. |
+| "Passing the original ref path to `compare.py` is the same as passing the copy in `refs/`" | No. The original path can move, be deleted, or be on an unmounted drive when the user asks for re-eval. The copy in `refs/<role>.wav` is immutable (sha256-verified) and is what ALL iterations + Step 8 compare against — every score must trace to it. Always use the persistent path. |
+| "Symlinking instead of `cp` to `refs/` saves disk" | Saves disk, breaks portability. `tar czf backup.tgz <openrig-evaluations-root>/` needs to work and produce a self-contained archive. Symlinks break either at `tar` time (becoming relative links) or at extract time on another machine. Always `cp`. |
+| "I'll update `eval.md` only at the end, with all iterations at once" | No. The interim rows are the score evolution — without them you can't show the user why v4 beat v2. Append a row per iteration, at the end of Step 5 of each loop. |
+| "`<openrig-evaluations-root>/<song-slug>/` already exists from a previous build — I'll `rm -rf` to start clean" | No. That erases the user's audit trail. Read `eval.md`, continue iteration numbering after the last `<role>-v<N>`, and keep the old YAMLs as history. Only delete if the user explicitly asks. |
+| "The placeholders `<Song>` `<Artist>` `<chain id>` in the `eval.md` template are literals — I'll write them as-is" | No. Placeholders in SKILL.md are slot markers — you substitute them with the real build values (real song title, real artist, real chain id read from `openrig://project`). If the final `eval.md` in the user's folder literally contains `<Song>` or `<Artist>`, you didn't do the build, you echoed the template. |
 
 ## Workflow (file-only path)
 
@@ -1269,9 +1273,11 @@ If the user picked the file-only path in Step −1:
    schema — flag every param value as "unverified path" in a comment
    at the top of the YAML and recommend the user load it once in
    OpenRig and check the GUI for any silently-ignored params.
-4. Print the file path and tell the user: "Pra ouvir, abre OpenRig,
-   seleciona a chain `<chain>`, e usa **Load Preset** apontando pra
-   esse arquivo. Não tocou no rig em memória."
+4. Print the file path and tell the user: "To hear it, open OpenRig,
+   select chain `<chain>`, and use **Load Preset** pointing at this
+   file. The in-memory rig was not touched." *(render in the user's
+   language at runtime — this English template documents the
+   structure, not the literal words to ship)*
 5. Skip the render+compare loop unless the user explicitly opts in
    later (would require switching to the MCP path for the render).
 6. **Persistent evaluation dir on this path.** Step 0a still applies:
@@ -1292,8 +1298,8 @@ If the user picked the file-only path in Step −1:
 
 ## Anti-patterns (all paths)
 
-- ❌ **Calling `add_chain` WITHOUT the user picking "criar chain
-  nova" in Step 3.1 AND answering ALL FOUR prompt blocks (name +
+- ❌ **Calling `add_chain` WITHOUT the user picking "create new
+  chain" in Step 3.1 AND answering ALL FOUR prompt blocks (name +
   instrument; input device + channels + mode; output device +
   channels + mode; explicit go-ahead).** `add_chain` is only
   legitimate as the explicit Step 3.1 sub-flow result — never to
@@ -1310,9 +1316,9 @@ If the user picked the file-only path in Step −1:
   pick for device_id, channels, and mode on both sides.
 - ❌ **Inferring the input/output device from chat history, from the
   song genre, from the `instrument` tag, or from memory of a prior
-  conversation.** "Provavelmente é a Scarlett porque o user falou
-  dela ontem" = decidir pelo user. Read `openrig://devices` this
-  turn and render the menu, regardless of what was said before.
+  conversation.** "Probably the Scarlett because the user mentioned
+  it yesterday" = deciding for the user. Read `openrig://devices`
+  this turn and render the menu, regardless of what was said before.
 - ❌ **Substituting the I/O menus in Step 3.1 with a narrowed "use
   Scarlett mono 1ch in + Scarlett stereo 1,2 out? (y/n)" ask.** Same
   anti-pattern as the chain-pick y/n shortcut: it pre-selects what
@@ -1322,11 +1328,11 @@ If the user picked the file-only path in Step −1:
   matches the song (or because it's the only candidate, or because
   it's the only chain in the project).** Step 3.1 always renders the
   full menu and waits for the user's pick — that's the entire point
-  of the step. Even "óbvia uma só, vou direto" is the marreta
-  behaviour the step exists to block.
+  of the step. Even "only one obvious match, I'll go straight to it"
+  is the auto-pick behaviour the step exists to block.
 - ❌ **Substituting the full numbered menu in Step 3.1 with a
   narrowed "use `<chain>`? (y/n)" ask.** Y/n hides the other chains
-  AND hides the "criar chain nova" option. Render the menu, every
+  AND hides the "create new chain" option. Render the menu, every
   time.
 - ❌ **Editing the chain's current blocks directly to write a new
   preset.** That destroys the user's existing active preset. Switch
