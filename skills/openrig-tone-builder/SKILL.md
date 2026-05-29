@@ -425,7 +425,20 @@ When two sources disagree on knob values, prefer the one that names the song exp
 
 ### 2. Map gear to OpenRig models — and respect stem vs mix evidence
 
-Pick candidate `MODEL_ID`s by reading `openrig://plugins` (the **discovery** source from the Iron Rule) and matching `block_type` + `brand` + `display_name` to the gear you researched. Use [`docs/blocks-reference.md`](https://github.com/jpfaria/OpenRig-plugins/blob/main/docs/blocks-reference.md) **only** for *recipes* — which amp family pairs with which cab, suggested knob ranges per style, per-song settings. Always prefer NAM amps over Native amps when the song has a real amp model. The param schema for whichever IDs you pick comes from `openrig://plugins/{id}/params` in **Step 2.6**, not from this step.
+> ⛔ **HARD ORDER GATE — do these THREE things, IN ORDER, before touching `blocks-reference.md`:**
+>
+> 1. **Read `openrig://plugins`** this turn (the **discovery** source from the Iron Rule). Cache the `id` set.
+> 2. **Shortlist candidate `MODEL_ID`s** by matching the gear you researched against the catalog's `block_type` + `brand` + `display_name` + `backend` fields. This is the moment `Vox AC30` → `nam_vox_ac30_*` (or whatever the catalog actually carries) happens. Discovery is ALWAYS this resource, never the doc.
+> 3. **ONLY THEN** look up `blocks-reference.md` — by `MODEL_ID`, to find recipe values (knob ranges per style, amp/cab pairings, per-song knob recipes). The doc is consulted **after** you have the IDs, never **to find** them.
+>
+> **FORBIDDEN at this step (and anywhere in the skill):**
+>
+> - `Read` / `grep` / `WebFetch` / `cat` on `blocks-reference.md` before step 1 is done in this turn.
+> - Greping the doc for amp brands (`vox`, `marshall`, `mesa`, `diezel`), song/artist names (`streets`, `u2`, `slipknot`), gear keywords (`dotted-eighth delay`, `boost`), or anything that looks like a discovery query. Discovery is `openrig://plugins`. The doc is a recipe lookup keyed by `MODEL_ID`.
+> - "I'll grep the doc first because it's faster" — no. The doc may not even list the plugin the user has installed; `openrig://plugins` is authoritative.
+> - "The doc has an Edge / U2 section so I'll start there" — no. The doc's per-song sections are recipe content, used only after the IDs are known.
+
+Always prefer NAM amps over Native amps when the song has a real amp model. The param schema for whichever IDs you pick comes from `openrig://plugins/{id}/params` in **Step 2.6**, not from this step.
 
 **The Step 0 fingerprint is your primary input here.** Walk each
 field against the `blocks-reference.md` *recipes*:
@@ -968,6 +981,13 @@ read-render-compare over persistent artifacts.
 ## Red flags -- STOP
 
 - Running `find crates/` or `grep MODEL_ID` or `Read` on any `.rs` file.
+- `Read` / `grep` / `Bash cat` / `WebFetch` on `blocks-reference.md`
+  WITHOUT having read `openrig://plugins` in this turn first. The doc
+  is a **recipe lookup keyed by `MODEL_ID`**, not a discovery channel.
+  Greping it for amp brands (`vox ac30`, `marshall plexi`), song
+  titles (`streets`, `clocks`), or artist names (`u2`, `slipknot`) to
+  shortcut discovery is exactly the failure mode the user has
+  corrected repeatedly. Discovery is `openrig://plugins`, always.
 - Calling `add_chain` without first reading `openrig://devices` AND
   presenting the user the input/output menus AND capturing their
   explicit device + channels + mode picks for BOTH sides. A chain
@@ -1082,6 +1102,9 @@ read-render-compare over persistent artifacts.
 | "`tone3000-fetch` é pesado (issue → PR → qa_audit gate), vou só substituir" | Custo é decisão do usuário, não sua. Surface o trade (a)/(b) na **Step 2.5** e deixa o user escolher. Decidir por ele = decidir que o timbre não importa — mas ele pediu O timbre, não UM timbre. |
 | "O capture mais próximo já instalado é 'close enough'" | "Close enough" é o julgamento do usuário, não seu. Pergunte em **Step 2.5** ANTES de substituir. Step 5 provenance documenta substituições autorizadas; não autoriza retroativamente as suas. |
 | "`blocks-reference.md` lista esse `MODEL_ID`, então posso chamar `add_block`" | O doc lista o que o projeto SABE carregar. `openrig://plugins` lista o que ESTA rig tem carregado. Os dois divergem — sempre cheque o segundo na **Step 2.5**. |
+| "Vou grepar `blocks-reference.md` por `vox ac30` / `streets` / `u2` pra achar o `MODEL_ID` mais rápido" | NÃO. Isso é discovery. Discovery é `openrig://plugins` SEMPRE. O doc é consultado DEPOIS, por `MODEL_ID`, pra recipe (knob values, pairings). Greping o doc por marca de amp, música ou artista = uso errado. Comportamento já corrigido várias vezes nesta conversa — não repita. |
+| "O doc tem uma seção sobre U2 / Edge / Coldplay, vou começar por lá" | A seção é recipe (knob settings, pairings) — útil DEPOIS que você tem o `MODEL_ID` via `openrig://plugins`. Começar pelo doc inverte a ordem e silenciosamente ignora plugins instalados que não estão no doc. Step 2 HARD GATE: plugins primeiro, doc depois. |
+| "Tenho strong prior do timbre, vou direto pro doc confirmar" | "Strong prior" não substitui a leitura de `openrig://plugins`. O usuário pode ter um plugin instalado que bate melhor com o prior do que o que está documentado. Step 2 sub-step 1 (read `openrig://plugins`) é incondicional. |
 | "O usuário pediu o preset, fetchar capture é fora de escopo da tone-builder" | Fora de escopo seria dispatch direto; a Step 2.5 só OFERECE o fetch como (a) e delega à `openrig-tone3000-fetch` quando o user aceita. Não oferecer = decidir pelo (b) escondido. |
 | "Vou deixar o `add_block` falhar e aí rodo Step 2.5 quando descobrir o erro" | Wrong order. 2.5 é **precondition** pra Step 3, não recovery. O error path polui o log, deixa estado parcial na chain e contorna a pergunta (a)/(b). Leia `openrig://plugins` PRIMEIRO. |
 | "Os blocos stock (`compressor_*`, `gate_basic`, `limiter_brickwall`) são built-in, óbvio que estão instalados — checo só os NAM/IR" | A Step 2.5 diz **for every `MODEL_ID`**. Stock pode estar desabilitado em builds custom, renomeado entre versões, ou ausente em forks. O custo do cross-check é uma leitura de resource — não vale a pena economizar. |
