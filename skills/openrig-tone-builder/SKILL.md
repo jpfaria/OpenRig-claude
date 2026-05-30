@@ -534,25 +534,28 @@ How:
 
 1. **Read `openrig://plugins` once** at the start of build, **BEFORE the first `add_block`** (it returns every installed plugin with `id`, `display_name`, `brand`, `block_type`, `backend`). Cache the `id` set in memory. **Discovering a missing capture via `add_block` failure is forbidden** — the gate runs upfront, not as recovery. If the resource read itself errors, STOP and ask the user before continuing; do NOT proceed optimistically.
 
-2. **For every `MODEL_ID` in the plan, check it's in that set.** "Every" = literally every one, including stock blocks like `compressor_studio_clean`, `gate_basic`, `eq_eight_band_parametric`, `limiter_brickwall`, `volume`, `native_guitar_eq`. The runtime hard-matches on the `id` string regardless of `backend`; narrowing the check to "only NAM/IR captures" is forbidden. For every miss, the user gets ONE clear choice — never make it for them:
+2. **For every `MODEL_ID` in the plan, check it's in that set.** "Every" = literally every one, including stock blocks like `compressor_studio_clean`, `gate_basic`, `eq_eight_band_parametric`, `limiter_brickwall`, `volume`, `native_guitar_eq`. The runtime hard-matches on the `id` string regardless of `backend`; narrowing the check to "only NAM/IR captures" is forbidden.
 
-   > "For the [block/role] the canonical capture is `<MODEL_ID>` (from `<amp/cab/...>`), but it is not installed on this rig.
-   > How do I proceed?
-   > **(a) import via `openrig:openrig-tone3000-fetch <query>`** — authentic capture from tone3000.com, but triggers the issue → PR → qa_audit/pack_plugins flow (heavy).
-   > **(b) substitute** with `<closest_installed_MODEL_ID>` (`<display_name>`, same `block_type`) — fast, but it is a *guess at the tone*, not THE tone.
-   > Suggested default: **(a)** when you asked for a specific amp/song; **(b)** when you are only sketching."
+   **For every miss, the default proposal is `openrig:openrig-tone3000-fetch`.** Substitution with a different installed plugin is NOT a peer option — it is a last-resort fallback, allowed only after the import path has been attempted and failed OR the user has explicitly refused to import. The ask template:
+
+   > "For the [block/role] the canonical capture is `<MODEL_ID>` (from `<amp/cab/...>`), but it is not installed on this rig. I will attempt to import it from tone3000 via `openrig:openrig-tone3000-fetch <query>` — this gets you the authentic capture, though it triggers the issue → PR → qa_audit/pack_plugins flow. Confirm to proceed, or tell me to stop and pick a different path."
    > *(render in the user's language at runtime — this English template documents the structure, not the literal words to ship)*
 
-   The "Suggested default" line is what you **recommend TO the user inside the ask message** — it is NOT a self-applied default. You always wait for the user's explicit answer. Auto-classifying the request as "just sketching" and applying (b) without sending the ask is the silent substitution this step forbids. If the user does not answer, ask once more or stop; never decide for them.
+   The user's response branches into one of three paths in sub-step 3 below. **You may NOT propose substitution as a first-pass option** — present `tone3000-fetch` as the path, and only fall back to substitution when the import path is genuinely closed.
 
-3. **Apply the user's choice before resuming the build:**
-   - **(a) import** → invoke `openrig:openrig-tone3000-fetch` with the relevant search term (artist, amp model, capture name). After the fetch skill lands the file under `OpenRig-plugins` AND clears the qa_audit/pack_plugins gate, the user's OpenRig instance must reload its catalog (`reload_plugin_catalog` MCP tool) before the new `MODEL_ID` appears in `openrig://plugins`. Re-read `openrig://plugins` to confirm presence before calling `add_block`.
-   - **(b) substitute** → record the substitution explicitly in the Step 5 provenance ("substituted `<wanted>` → `<used>` per user OK"). The substitution is authorized by THIS step, not by the Step 5 disclosure.
-   - **(c) user wants to abort** → stop, do not save anything.
+3. **Apply the user's response:**
 
-4. **One ask per missing capture.** If four blocks miss four different captures, you ask four times — or batch them in one message listing all four with (a)/(b) per row. Do NOT collapse "I'll substitute all of them" into a single unilateral decision.
+   - **(a) Confirm import.** Invoke `openrig:openrig-tone3000-fetch` with the relevant search term (artist, amp model, capture name).
+     - If the fetch **succeeds**: after the skill lands the file under `OpenRig-plugins` AND clears the qa_audit/pack_plugins gate, the user's OpenRig instance must reload its catalog (`reload_plugin_catalog` MCP tool) before the new `MODEL_ID` appears in `openrig://plugins`. Re-read `openrig://plugins` to confirm presence before calling `add_block`. Done.
+     - If the fetch **fails** (no tone3000 hit, fetch errors, qa_audit blocks, user vetoes the PR mid-flow): you may now go to (b) — but you MUST ask the user explicitly, with the failure mode named ("tone3000 returned no results for `<query>`" / "qa_audit blocked the pack" / etc.) — never silently fall through.
 
-5. Do not proceed to Step 2.6 until every `MODEL_ID` in the plan is either present in `openrig://plugins` OR explicitly substituted with the user's OK in (3b).
+   - **(b) Substitute — only after (a) was attempted and closed.** The user explicitly chose substitution (either upfront, by telling you to skip tone3000-fetch, or after a failed (a)). Ask them WHICH specific substitute from the installed catalog; do NOT auto-pick a "closest match" and do NOT pre-fill the menu with only your favorite. Present three to five candidates from `openrig://plugins` whose `block_type` matches and whose `brand` / `display_name` is plausibly adjacent, and let the user pick. Then record the substitution in the Step 5 provenance as `substituted <wanted> → <used> per user OK in Step 2.5`.
+
+   - **(c) Abort.** User wants neither import nor substitution for this block. Stop the build; do not save anything partial.
+
+   **One ask per missing capture.** If four blocks miss four different captures, you ask four times — or batch them in one message listing all four (each with its own tone3000 query as the primary proposal). Do NOT collapse "I'll substitute all of them" or "I'll import all of them in one shot without per-block confirmation" into a single unilateral decision.
+
+4. Do not proceed to Step 2.6 until every `MODEL_ID` in the plan is either present in `openrig://plugins` OR explicitly substituted via path (3b) with the user's OK on the specific substitute.
 
 ### 2.6. Read the parameter schema for every chosen `MODEL_ID` (BEFORE any `set_block_parameter_*`)
 
@@ -973,9 +976,13 @@ read-render-compare over persistent artifacts.
 - [ ] Every `MODEL_ID` actually passed to `add_block` is present in
       `openrig://plugins` — verified by reading the resource in
       **Step 2.5**.
-- [ ] Any missing captures were resolved through **Step 2.5** with the
-      user's explicit (a) import via `openrig:openrig-tone3000-fetch` /
-      (b) substitute choice, and the resulting substitution (if any) is
+- [ ] Any missing captures were resolved through **Step 2.5** with
+      `openrig:openrig-tone3000-fetch` as the primary proposal.
+      Substitution (path 3b) was offered ONLY after the import path
+      was attempted and closed (no tone3000 result, fetch error,
+      qa_audit block, or user veto). For each substituted block, the
+      user explicitly picked the specific substitute from a list of
+      candidates — never your auto-pick — and the substitution is
       recorded in the Step 5 provenance.
 - [ ] Every `path` passed to `set_block_parameter_*` came from
       `openrig://plugins/<MODEL_ID>/params` read in **Step 2.6** —
@@ -1112,11 +1119,21 @@ read-render-compare over persistent artifacts.
   IDs; an absent capture either crashes the call or silently selects
   nothing, and the user has no way to know you guessed.
 - Silently substituting a missing capture for "the closest installed"
-  amp/cab instead of surfacing the (a) import via
-  `openrig:openrig-tone3000-fetch` / (b) substitute choice in
-  **Step 2.5**. Close-enough is the user's judgment, not yours — and
-  documenting it in Step 5 provenance after the fact does not
+  amp/cab instead of proposing `openrig:openrig-tone3000-fetch` as
+  the primary path in **Step 2.5**. Substitution is a last-resort
+  fallback, not a peer option — propose `tone3000-fetch` first, and
+  only ask about substitution after the import path is genuinely
+  closed (no tone3000 result, fetch error, user veto). Even then,
+  substitution requires asking the user to pick the specific
+  substitute from a candidate list — never your auto-pick.
+  Documenting it in Step 5 provenance after the fact does not
   retroactively authorize a unilateral decision.
+- Presenting the **Step 2.5** ask as a peer (a)/(b) menu where
+  `tone3000-fetch` and "substitute with `<your favorite>`" sit side
+  by side as equivalent options. The user's stated rule: missing
+  plugin → propose import first; substitution is only when there is
+  no other solution AND still requires asking. The ask must lead
+  with import; substitution surfaces only after import is closed.
 - Calling `add_block` to "discover" which captures are missing instead
   of reading `openrig://plugins` upfront in **Step 2.5**. The error
   path is not a substitute for the gate — it pollutes the rig with
@@ -1193,8 +1210,10 @@ read-render-compare over persistent artifacts.
 | "I'll research first to know what to look for, then fingerprint" | Wrong order. Research without the fingerprint is theater — you bias toward what "sounds right on paper". Step 0 (fingerprint) comes before Step 1 (research). |
 | "The user gave me WAVs but I already know the song, fingerprint is redundant" | The WAVs are the user's reference take, not the song you remember. Era, mix, performance and the user's playing all shift the fingerprint. Run Step 0. |
 | "I'll fingerprint just one stem and reuse it for the other role" | Rhythm and lead have different gain stages, different time effects, different EQs. Fingerprint **each** WAV — that's what produces the role-specific presets the skill promises. |
-| "`tone3000-fetch` is heavy (issue → PR → qa_audit gate), I'll just substitute" | Cost is the user's decision, not yours. Surface the (a)/(b) trade in **Step 2.5** and let the user choose. Deciding for them = deciding that the tone doesn't matter — but they asked for THE tone, not A tone. |
-| "The closest already-installed capture is 'close enough'" | "Close enough" is the user's judgment, not yours. Ask in **Step 2.5** BEFORE substituting. Step 5 provenance documents authorized substitutions; it does not retroactively authorize yours. |
+| "`tone3000-fetch` is heavy (issue → PR → qa_audit gate), I'll just substitute" | Cost is the user's decision, not yours. **Step 2.5 leads with `tone3000-fetch` as the primary proposal — substitution is a fallback, not a peer.** Propose import; if the user vetoes that path explicitly, then ask which specific substitute. Deciding for them = deciding that the tone doesn't matter — but they asked for THE tone, not A tone. |
+| "The closest already-installed capture is 'close enough'" | "Close enough" is the user's judgment, not yours. Ask in **Step 2.5** — and only after the `tone3000-fetch` import path is closed. Step 5 provenance documents authorized substitutions; it does not retroactively authorize yours. |
+| "I'll present `tone3000-fetch` and substitute side-by-side as (a)/(b) — let the user pick whichever" | NO. The two are not peers. The user has stated the rule: missing plugin → propose import first; substitution only when no other solution; even then ask. The ask leads with `tone3000-fetch`; substitution surfaces only if (a) is closed (no tone3000 result, fetch error, or user veto). |
+| "I'll auto-pick the closest substitute and just confirm with the user (y/n)" | The y/n shortcut collapses the candidate list to one option of your choosing. When substitution is genuinely the path forward (after `tone3000-fetch` is closed), present 3–5 candidates from `openrig://plugins` with matching `block_type` and adjacent `brand` / `display_name` — let the user pick. Auto-picking + asking confirmation is the same anti-pattern as auto-picking. |
 | "`blocks-reference.md` lists this `MODEL_ID`, so I can call `add_block`" | The doc lists what the project KNOWS how to load. `openrig://plugins` lists what THIS rig actually has loaded. The two diverge — always check the second one in **Step 2.5**. |
 | "I'll grep `blocks-reference.md` for `vox ac30` / `streets` / `u2` to find the `MODEL_ID` faster" | NO. That's discovery. Discovery is `openrig://plugins` ALWAYS. The doc is consulted AFTER, by `MODEL_ID`, for recipe (knob values, pairings). Greping the doc by amp brand, song or artist = wrong use. Behaviour already corrected several times in this conversation — do not repeat. |
 | "The doc has a section about U2 / Edge / Coldplay, I'll start there" | The section is recipe (knob settings, pairings) — useful AFTER you have the `MODEL_ID` via `openrig://plugins`. Starting from the doc inverts the order and silently ignores installed plugins that are not in the doc. Step 2 HARD GATE: plugins first, doc after. |
