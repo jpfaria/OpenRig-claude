@@ -17,8 +17,10 @@ is a **fallback** for steps where the API surface is insufficient (rare).
 ## Iron rules
 
 1. **NEVER touch the user's main OpenRig-plugins checkout.** Every
-   import runs in a fresh `.solvers/issue-N/` worktree per the
-   OpenRig-plugins dev-flow LAW.
+   import runs in a fresh `.solvers/issue-N/` **independent clone** per
+   the OpenRig-plugins dev-flow LAW. `git worktree` is FORBIDDEN —
+   worktrees share the parent `.git` (refs, index, hooks) and break the
+   isolation guarantee; use a clone.
 2. **The user picks the tone.** Even when listing "novidades", show
    the candidates and let the user choose; never import a guess.
 3. **Inference misses become `# TODO:` YAML comments** in the
@@ -132,7 +134,7 @@ Print the tone title, gear, model count, and the chosen slug to the
 user. Ask for confirmation before downloading. Imported once = one
 issue + one PR in OpenRig-plugins.
 
-#### 2 — Open OpenRig-plugins issue + worktree
+#### 2 — Open OpenRig-plugins issue + isolated clone
 
 ```bash
 cd "$PLUGINS_REPO"
@@ -141,7 +143,13 @@ ISSUE=$(gh issue create \
   --body "Source: https://www.tone3000.com/tones/<id>. Imported via openrig-tone3000-fetch skill (jpfaria/OpenRig-claude)." \
   | grep -oE '[0-9]+$')
 mkdir -p .solvers
-git worktree add ".solvers/issue-$ISSUE" -b "feature/issue-$ISSUE" main
+# Independent clone — NOT `git worktree` (worktrees share the parent
+# .git and break isolation). Cleanup is `rm -rf` of the dir.
+git clone . ".solvers/issue-$ISSUE"
+cd ".solvers/issue-$ISSUE"
+git remote set-url origin git@github.com:jpfaria/OpenRig-plugins.git
+git fetch origin main && git reset --hard origin/main
+git checkout -b "feature/issue-$ISSUE"
 WORK="$PLUGINS_REPO/.solvers/issue-$ISSUE"
 ```
 
@@ -202,7 +210,36 @@ captures:
 - `pedal` + tags contain `delay`/`reverb`/`chorus`/`modulation` → `fx_pedal`; else `gain_pedal`.
 - `full-rig`, `outboard` → emit a `# TODO: <gear> not directly representable; pick type manually` comment, leave the field blank for the user.
 
-**Parameter axis inference** from each capture's `name` field. Token-split, classify against this dictionary:
+**Parameter axes are MANDATORY — never a flat `model` dump.** The
+capture `name` (and filename) encodes the real settings; decompose it
+into meaningful axes. **It is FORBIDDEN to emit a single `model` axis
+whose values are the raw capture names** (e.g. `model:
+fender_57customdeluxe_clean_in1_700epochs`) — that produces an unusable
+OpenRig picker and is the #1 import defect (OpenRig-plugins issue #64:
+226 plugins had to be redone).
+
+How to apply:
+- If the plugin already exists in another architecture (an `_a1`/`_a2`
+  sibling), MIRROR that sibling's axis names + values where the captures
+  correspond.
+- Strip the amp/brand, the plugin-id/slug tokens, and training noise
+  (`700epochs`, `1000epochs`, `di`, `on`) from every value. Values:
+  short, lowercase, snake_case, distinct, meaningful (`clean`, `crunch`,
+  `od`, `in1`, `sm57`, `vol3`, `bridged`).
+- Use MULTIPLE axes when names factor cleanly (e.g. `gain` + `input`).
+  A SINGLE axis is the last resort, only for genuinely non-factorable
+  packs — and even then with CLEAN stripped values, never raw filenames.
+- Single-capture plugin → value `default`. NEVER emit an empty value:
+  `pack_plugins` rejects it with "did not match any variant of untagged
+  enum ParameterValue".
+- Validate before the gate: every capture file mapped exactly once;
+  every captures value declared in `parameters[].values`; value combos
+  unique.
+- At catalogue scale this is a per-plugin inference job — drive it with
+  a multi-agent workflow (one agent per plugin, fed the capture names +
+  the sibling manifest), not a single prefix-strip heuristic.
+
+Dictionary to seed token classification:
 
 - mic: `sm57`, `sm7b`, `md421`, `re20`, `beta52`, `c414`, `r121`, `r10`, `m160`, `u87`
 - position: `cap edge` → `cap_edge`, `cone edge` → `cone_edge`, `cap`, `cone`, `distant`, `12 inch`/`12in` → `12_inch`, `24in` → `24_inch`
@@ -240,6 +277,9 @@ The skill stops here. The user owns the gate, the manifest cleanup, and the PR.
 
 ## Anti-patterns
 
+- ❌ A single `model` parameter axis whose values are raw capture filenames — infer real axes from the names (see step 5). This is the #1 import defect.
+- ❌ An empty parameter value (`- ` / `model: `) — breaks `pack_plugins` (ParameterValue enum). Single-capture → `default`.
+- ❌ `git worktree add` for `.solvers/issue-N` — use an independent clone (worktrees share the parent `.git`).
 - ❌ Writing into `$PLUGINS_REPO/plugins/source/` directly (must be `$WORK/…`).
 - ❌ Re-running import over an existing `$TARGET` — refuse, surface the conflict; the user picks a different slug or removes the old dir intentionally.
 - ❌ Pushing with `# TODO` comments still in the manifest.
