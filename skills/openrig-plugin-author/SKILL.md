@@ -121,6 +121,12 @@ Execute in order. Validation (1-3) happens BEFORE any write.
 
 ## Parameter-axis inference dictionary
 
+**REQUIRED METHOD:** derive the `parameters:`/`captures:` block per
+`openrig-manifest-parameters` (decompose each filename into the exact
+controls it encodes; knobs numeric, enums string; never a flat `model`
+of raw filenames, never an invented `low/mid/high` over real numeric
+settings). The dictionary below only seeds token matching.
+
 Same dictionary as `openrig-tone3000-fetch`. For each capture:
 
 - Take the basename (no extension), lowercase it, token-split on `_`,

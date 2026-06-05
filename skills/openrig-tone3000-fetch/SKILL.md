@@ -210,6 +210,9 @@ captures:
 - `pedal` + tags contain `delay`/`reverb`/`chorus`/`modulation` → `fx_pedal`; else `gain_pedal`.
 - `full-rig`, `outboard` → emit a `# TODO: <gear> not directly representable; pick type manually` comment, leave the field blank for the user.
 
+**REQUIRED SUB-SKILL:** derive this block per `openrig-manifest-parameters`
+(the canonical method). Summary below.
+
 **Parameter axes are MANDATORY — never a flat `model` dump.** The
 capture `name` (and filename) encodes the real settings; decompose it
 into meaningful axes. **It is FORBIDDEN to emit a single `model` axis
