@@ -29,7 +29,16 @@ low/mid/high" axis, a single "model" dropdown) is wrong.
 
 ## Method (per plugin)
 
-1. **List every capture filename.** `ls captures/` (NAM) or the IR dir.
+1. **List every capture filename AND read the tone3000 description.**
+   `ls captures/` (NAM) or the IR dir; then fetch both
+   `…/rest/v1/tones?id=eq.<id>&select=title,description` and
+   `…/rest/v1/models?tone_id=eq.<id>&select=name,model_url`. **The filename is
+   frequently opaque** (a storage hash) — the real settings live in the model
+   `name` and the **description**, which often spells the dial positions out in
+   words: *"File numbers = Presence, Bass, Middle, Treble, Volume I, Volume II"*,
+   *"everything at 12 o'clock"* (= noon = 5), *"BCL_HG_2: Gain 5, Bass 7…"*.
+   Decode from the filename **and** the description — reading the filename alone
+   is the #1 cause of invented/metadata axes.
 2. **Tokenize each filename** on `_`/`-`/space. Identify each setting:
    its NAME (gain, drive, tone, level, treble, bass, mid, presence,
    master/mv, volume, depth, reverb, sustain, blend, contour, channel,
@@ -61,6 +70,19 @@ short, lowercase, snake_case, distinct.
   and `gain`. A **sparse grid is valid** — missing cells are fine; only
   DUPLICATE cells (two captures with the same value combo) are forbidden
   (`pack_plugins`: "capture grid has duplicate entries").
+- **Every parameter NAME is a real control on the gear.** Use only names that
+  exist on an amp/preamp/pedal — knobs/switches like `gain`, `drive`, `tone`,
+  `level`, `treble`, `bass`, `mid`, `presence`, `master`, `volume`, `depth`,
+  `reverb`, `channel`, `mic`, `voicing`, `mode`, `boost`, `bias`, `comp`,
+  `blend`, `filter`, `contour`, `sag`, `transistor`, `voltage`, `feel`, `hf`,
+  `load`, `aggression`, `solo`, `tubes`… For **IR** plugins (cabs AND
+  acoustic-guitar bodies) use a real mic-ing / version axis: `mic`, `position`,
+  `distance`, `version`, `flavor`, `pickup`. **FORBIDDEN as a name:** NAM
+  training/capture metadata (`epochs`, `train`, `capture`, `buffer`, `nam_size`,
+  `take`, `arch`, `block`, `module`) and invented abstractions (`model`, `size`,
+  `variant`, `setting`, `version`/`flavor` on an amp). If you reached for one of
+  these, you did NOT decode the real control — go back to the filename and the
+  description.
 - **No invented abstraction.** Never replace `level_25_gain_75` with
   `drive: high`. Expose `level` + `gain`.
 - **No flat `model` of raw filenames.** A single `model` axis whose
