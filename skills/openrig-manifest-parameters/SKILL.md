@@ -63,6 +63,33 @@ low/mid/high" axis, a single "model" dropdown) is wrong.
 Strip the amp/brand/plugin-id/epoch tokens from every value. Values:
 short, lowercase, snake_case, distinct.
 
+### A knob's value is always a NUMBER — decode the position
+
+If an axis IS a real knob (gain/drive/tone/level/…), its values MUST be numeric
+on the knob's own scale. Decode every position-as-word / clock / code into the
+number — never ship `9_oclock`, `noon`, `max`, `900`, `8_5` as a knob value:
+
+- **Clock face → number** on a 0–10 knob: `noon` / `12_oclock` = 5,
+  `9_oclock` ≈ 2.5, `3_oclock` ≈ 7.5, fully clockwise = 10. ×100 / ×10 clock
+  codes: `Tone900` = 9.0, `1030` (10:30) = 10.3, `p0900` = 9. Divide — do not
+  keep the raw `900`.
+- **`max` / `min` / `full` / `off`** = the knob's TOP / BOTTOM number for THAT
+  pedal — read the real range. TS808 drive is 0–10 ⇒ `max` = 10; a knob that
+  goes to 12 ⇒ `max` = 12. Never leave the literal word `max` on a knob.
+- **Concatenated digits**: `555` = 5 / 5 / 5 across three knobs in name order.
+  **Underscore-decimal**: `8_5` = 8.5, `g4_5` = 4.5 (NOT 85 / 45).
+- **Numbered hand-picked settings** (author shipped N configs that do NOT form a
+  knob grid) → one `preset` axis numbered `1..N`, NOT four sparse EQ knobs.
+
+**Do NOT invent precision.** When the capture records only a QUALITATIVE label
+and no number exists (`low` / `mid` / `high`, `lite` / `fat`), keep it a STRING
+enum — making up `low`=3 / `mid`=5 / `high`=8 fabricates data the capture never
+had. Convert to numbers only when the real knob scale is known or stated.
+
+**Real switches stay strings.** `off` / `on`, `engaged`, `di` / `full`,
+channel / voicing / mode selectors — discrete switches, not knob positions; keep
+them as string enums.
+
 ## Hard rules
 
 - **Correlated knobs still get separate axes.** If `level` and `gain`
