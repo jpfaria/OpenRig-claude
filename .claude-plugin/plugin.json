@@ -1,7 +1,7 @@
 {
   "name": "openrig",
   "description": "Control a running OpenRig rig from any AI client: build tones, tweak the chain, switch presets — driven through OpenRig's MCP server.",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "author": {
     "name": "João Paulo"
   },
