@@ -73,22 +73,31 @@ number — never ship `9_oclock`, `noon`, `max`, `900`, `8_5` as a knob value:
   `9_oclock` ≈ 2.5, `3_oclock` ≈ 7.5, fully clockwise = 10. ×100 / ×10 clock
   codes: `Tone900` = 9.0, `1030` (10:30) = 10.3, `p0900` = 9. Divide — do not
   keep the raw `900`.
-- **`max` / `min` / `full` / `off`** = the knob's TOP / BOTTOM number for THAT
-  pedal — read the real range. TS808 drive is 0–10 ⇒ `max` = 10; a knob that
-  goes to 12 ⇒ `max` = 12. Never leave the literal word `max` on a knob.
+- **`max` / `full`** = the knob's TOP for THAT pedal (read the range: TS808 drive
+  0–10 ⇒ `max` = 10; a knob to 12 ⇒ `max` = 12). **`off` / `min`** = `0`.
+  **Absent control** (the knob is not present on this capture/channel — e.g. an
+  AC30 Normal channel has no Bass/Treble) = **`-1`** (a numeric sentinel, distinct
+  from a real `0`). Never leave a literal word on a knob.
 - **Concatenated digits**: `555` = 5 / 5 / 5 across three knobs in name order.
   **Underscore-decimal**: `8_5` = 8.5, `g4_5` = 4.5 (NOT 85 / 45).
 - **Numbered hand-picked settings** (author shipped N configs that do NOT form a
   knob grid) → one `preset` axis numbered `1..N`, NOT four sparse EQ knobs.
 
-**Do NOT invent precision.** When the capture records only a QUALITATIVE label
-and no number exists (`low` / `mid` / `high`, `lite` / `fat`), keep it a STRING
-enum — making up `low`=3 / `mid`=5 / `high`=8 fabricates data the capture never
-had. Convert to numbers only when the real knob scale is known or stated.
+**A knob axis NEVER holds a string.** When you find string values on a
+knob-named axis (`gain`/`bass`/`treble`/`volume`/`mid`/`presence`/`master`/
+`level`/`drive`/`tone`/`dist`/…), exactly one of two things is true:
 
-**Real switches stay strings.** `off` / `on`, `engaged`, `di` / `full`,
-channel / voicing / mode selectors — discrete switches, not knob positions; keep
-them as string enums.
+1. **They are knob POSITIONS** → decode to numbers (per the rules above;
+   qualitative `low`/`mid`/`high` = `3`/`5`/`8`, absent = `-1`).
+2. **They are NOT positions but VOICINGS / CHANNELS / GAIN-STAGES / MODES /
+   INPUTS / PEDALS** (`clean`/`crunch`/`od`, `lg`/`mg`/`hg`, `in1`/`in2`,
+   `standard`/`ultra_lo`/`ultra_hi`, pedal names) → **the axis is MISNAMED.**
+   Rename it to the right enum (`voicing`/`channel`/`mode`/`input`/`gain_stage`/
+   `pedal`); the string values stay (it is a selector, not a knob).
+
+A genuine selector that already has the right name (`channel`, `mic`, `voicing`,
+`mode`, a `boost` PEDAL selector, `off`/`on` switch) correctly keeps string
+values — the rule is only that a control NAMED like a knob must be numeric.
 
 ## Hard rules
 
