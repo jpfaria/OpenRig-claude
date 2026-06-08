@@ -126,6 +126,27 @@ curl -sS -H "apikey: $TONE3000_ANON" -H "Authorization: Bearer $TONE3000_ANON" \
 
 If step 2 returns nothing (older tone whose title prefix returns >20 newer matches first), retry with a longer `query_term` or increment `page_number`.
 
+### Cab IR candidates — pre-filter BEFORE proposing an import
+
+Most community cab IRs on tone3000 will **fail the OpenRig-plugins gate**
+and are not worth an import issue. `tools/loudness_audit` enforces
+`SPECTRAL_PEAK_CEILING_DB = 0.5` — after the audit normalises the IR, its
+worst-case frequency-response peak must be ≤ 0.5 dB. Voiced/room-captured
+IRs routinely show 15–27 dB peaks and get rejected. Screen candidates
+first:
+
+- **Size:** a clean cab IR is < 200 ms (≈ 30 KB at 48 kHz mono 24-bit).
+  Anything > 1 s is cab+room and carries modes that spike the peak.
+- **Prefer** titles tagged `Mix Ready` / `Calibrated` / `Flat` — these
+  are usually spectrally flattened. **Avoid** intentionally voiced names
+  (`Bright`, `Treble No Bass`, `Warm and Bassy`, `Cone Edge`, `Off Axis`):
+  the name announces the violation.
+- If no candidate passes these, the honest answer is **"no usable
+  import"**, not lowering the threshold — the ceiling encodes a project
+  invariant (a 15 dB narrow-band peak is an audible resonance defect).
+
+NAM amp/pedal captures are not subject to this — it is a cab-IR concern.
+
 ### Import (full flow)
 
 #### 1 — Confirm intent
@@ -164,17 +185,63 @@ All file ops below happen under `$WORK`. **Never** under
 
 #### 4 — Download captures
 
-```bash
-TARGET="$WORK/plugins/source/$kind/$slug"
+**Always prefer the newest `architecture_version`.** A tone3000 NAM
+capture is often re-trained on a newer NAM architecture and re-uploaded
+as a *new* `models` row that sits **alongside** the old one — same
+`name`, same `position`, same `size`, higher `architecture_version`.
+Downloading every row would ship both the stale and the current capture.
+So before downloading, collapse each capture group to a single winner:
+
+- **Group key** = `(name, position, size)`. Rows that differ only by
+  `architecture_version` are the *same* capture; rows that differ in
+  `size` (`standard` / `lite` / `feather` / …) are distinct deliverables
+  and are each kept.
+- **Winner** = highest `architecture_version` in the group. Tie-break on
+  newest `created_at`. `architecture_version` is treated numerically when
+  it parses as a number, else lexically (then `created_at` decides).
+- **Only NAM** (`kind = nam`) is versioned this way. For `kind = ir`,
+  skip this step and download every row — IRs carry no architecture.
+
+**A model with `model_url: null` is still TRAINING, not a failed
+import — skip it, do not treat it as missing.** When `/models` returns a
+row with `model_url: null` (usually `size: null`, `model_json: null`
+too), the `.nam` does not exist yet: the uploader queued a training that
+hasn't finished. Confirm with
+`GET /rest/v1/trainings?id=eq.<training_id>&select=*` — `status_text:
+"Task queued"` / `is_success: null` means not-yet-generated. Filter these
+out before grouping (`jq 'map(select(.model_url != null))'`) and, when
+deciding whether a local plugin is "incomplete" vs the remote tone,
+**discount null-url models from the remote count** — they are not
+downloadable. Revisit when the urls populate.
 SUBDIR=$([ "$kind" = "ir" ] && echo "ir" || echo "captures")
 mkdir -p "$TARGET/$SUBDIR"
-# For every model from /rest/v1/models?tone_id=eq.<id>:
-curl -sS -o "$TARGET/$SUBDIR/$(basename "$MODEL_URL")" "$MODEL_URL"
+
+# MODELS_JSON = the raw array from /rest/v1/models?tone_id=eq.<id>
+if [ "$kind" = "nam" ]; then
+  # keep only the newest architecture_version per (name, position, size)
+  SELECTED=$(jq -c '
+    group_by([.name, .position, .size])
+    | map(sort_by([(.architecture_version|tonumber? // -1), .created_at]) | last)
+  ' <<<"$MODELS_JSON")
+else
+  SELECTED="$MODELS_JSON"
+fi
+
+# Surface what was superseded — never drop silently (repo LAW).
+DROPPED=$(jq -nr --argjson all "$MODELS_JSON" --argjson keep "$SELECTED" \
+  '$all - $keep | .[] | "\(.name) pos=\(.position) size=\(.size) arch=\(.architecture_version) (\(.model_url|split("/")|last))"')
+[ -n "$DROPPED" ] && printf 'Superseded by a newer architecture_version, NOT downloaded:\n%s\n' "$DROPPED"
+
+# Download only the winners:
+jq -r '.[].model_url' <<<"$SELECTED" | while read -r MODEL_URL; do
+  curl -sS -o "$TARGET/$SUBDIR/$(basename "$MODEL_URL")" "$MODEL_URL"
+done
 ```
 
 The bucket URL is direct and unauthenticated. Reject any download
 that yields HTTP ≠ 200 or 0 bytes — surface the failure, don't
-continue silently.
+continue silently. The `captures:` block of the manifest (step 5) maps
+**only the downloaded winners** — never reference a superseded file.
 
 #### 5 — Write `manifest.yaml`
 
@@ -253,10 +320,19 @@ Dictionary to seed token classification:
 For each capture, classify; for the manifest's `parameters:` block, aggregate the distinct values seen per axis. **If a capture has no recognised tokens**, emit instead:
 
 ```yaml
-- values:
+- values: {}
   # TODO: could not infer parameter axes for "<capture name>"
   file: <subdir>/<filename>
 ```
+
+**`values:` MUST parse as a map — write `values: {}`, never a bare
+`values:`.** A bare `values:` followed by a comment (or nothing) is
+`null` in YAML, and the OpenRig plugin-loader types the field as a map
+(`BTreeMap<String, String>`), so it rejects the manifest with
+`invalid type: unit value, expected a map` (the SPA logs
+`plugin-loader: skipping package: invalid manifest.yaml`). The same
+applies to any axis-less capture (`parameters: []`): the empty map is
+`{}`, written explicitly.
 
 **Do NOT write `output_gain_db`** — that is computed by
 `loudness_audit` in OpenRig-plugins.
@@ -289,6 +365,7 @@ The skill stops here. The user owns the gate, the manifest cleanup, and the PR.
 - ❌ `QA_AUDIT_SKIP=1` to silence a real `qa_audit` failure — never. That env var exists only for when the audit tool itself is broken, not to dodge a finding (OpenRig-plugins LAW).
 - ❌ Asking "does it sound better now?" — sonic verification is `qa_audit` thresholds; ear-validation is a methodology defect.
 - ❌ Importing more than one tone per PR.
+- ❌ Downloading every `models` row for a NAM tone when several share the same `(name, position, size)` and differ only by `architecture_version` — that ships a stale capture next to the current one. Keep only the highest `architecture_version` per group (step 4); IRs are exempt.
 - ❌ Portuguese (or any non-English) in the generated manifest, in the commit message, or in the issue/PR body. Only the live chat stays in the user's language.
 - ❌ Inventing a tone id "based on what's similar" when search returns no exact match — surface "no match", let the user choose.
 

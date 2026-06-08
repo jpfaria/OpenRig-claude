@@ -72,6 +72,14 @@ reference stem provided, this preset is a research-only guess; I
 cannot validate it" — so the user can decide whether to provide one
 or accept the limitation. Silent skipping = failure of the skill.
 
+**Validation is the analyzer's `match_score`/`diff.json`, never the
+user's ears.** It is FORBIDDEN to substitute "load it and tell me if it
+sounds better" / "does this sound closer?" for the render→compare loop.
+Asking the user to judge by ear does not regress-protect and offloads a
+decision the methodology already answers objectively — every sonic
+verdict in this skill comes from a deterministic measurement against the
+reference, not from an ear test.
+
 The DI path is `<openrig-source-root>/assets/audio/input.wav`. Not
 `assets/sound/`, not `~/Music/`, not a fresh user-supplied DI. This
 one file. If it is missing from the OpenRig repo, that is a bug in

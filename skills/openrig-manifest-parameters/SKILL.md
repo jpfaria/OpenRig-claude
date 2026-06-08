@@ -82,6 +82,11 @@ number — never ship `9_oclock`, `noon`, `max`, `900`, `8_5` as a knob value:
   **Underscore-decimal**: `8_5` = 8.5, `g4_5` = 4.5 (NOT 85 / 45).
 - **Numbered hand-picked settings** (author shipped N configs that do NOT form a
   knob grid) → one `preset` axis numbered `1..N`, NOT four sparse EQ knobs.
+- **Numeric values are PLAIN integers — never zero-padded** (`01`→`1`, `08`→`8`).
+  Leading zeros hit the YAML octal trap: `08`/`09` are invalid octal and silently
+  parse as **strings** while `01`–`07` parse as ints, producing a mixed-type axis
+  that breaks the grid. Strip the padding so every value on the axis is the same
+  numeric type.
 
 **A knob axis NEVER holds a string.** When you find string values on a
 knob-named axis (`gain`/`bass`/`treble`/`volume`/`mid`/`presence`/`master`/

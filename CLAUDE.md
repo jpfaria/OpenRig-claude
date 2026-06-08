@@ -23,3 +23,15 @@ Every `skills/<name>/SKILL.md`, every script docstring, every committed `.md`, e
 **Why:** the skill is a shared artefact. Mixing languages inside it makes it harder for future contributors to read, harder for English-locale users to follow, and inconsistent for any non-PT agent invocation. The agent's transient chat output is the right place for locale adaptation — not the durable skill text.
 
 **How to apply:** before committing any edit to a `SKILL.md`, scan for PT-BR (or any non-English) phrases and either translate them to English or, if they're examples of what the agent should *say* to a user, wrap them as `<!-- render in user's language -->` examples with English commentary.
+
+## Shipping a skill edit: edit source → commit → push, in one go (transversal)
+
+When the user asks to **edit a skill** (or any committed file) in this repo, the unit of work **includes `git commit` + `git push origin main`** — do NOT stop after the edit to ask "want me to commit/push?". This repo's whole purpose is distribution: a skill edit that stays local is useless because it never reaches the installed plugin. The global "no unrequested shared-state actions" rule is **overridden here** — publishing the skill IS the requested work.
+
+**Always edit the SOURCE repo, never the installed cache.** The OpenRig plugin source is `https://github.com/jpfaria/OpenRig-claude`; skills live at `skills/<name>/SKILL.md`. Edits under `~/.claude/plugins/cache/...` (or the marketplace clone at `~/.claude/plugins/marketplaces/openrig/`) are transient — they vanish on the next plugin update. A cache edit is at most a same-session stopgap; the PR/push to source is the deliverable.
+
+**Do NOT bump `.claude-plugin/plugin.json` manually.** CI auto-commits `chore: bump plugin.json to X.Y.Z [skip ci]` after every non-bump push to `main`. A manual bump races CI and gets dropped on the next `git pull --rebase` (`warning: skipped previously applied commit`). Push only the skill change; let CI bump. (Exception: an explicit user request for a specific version like `bump to 0.2.0` — then `git pull --rebase` first, edit, push, and accept that CI may add a patch bump on top.)
+
+**Commit style:** `fix(<skill-short-name>): …` / `feat(<skill>): …` (match `git log`).
+
+**Scope note:** this applies to `OpenRig-claude` only. The main OpenRig app repo (Rust/Slint) and OpenRig-plugins keep their standard gitflow — issue branches, PRs, gate, no auto-push to `main`/`develop`.

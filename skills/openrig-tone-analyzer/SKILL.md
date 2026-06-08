@@ -27,6 +27,14 @@ deterministically. This skill itself never invokes MCP tools or
 3. **No name claims from audio.** "It sounds like a Mesa Rectifier" comes
    from `openrig-tone-builder`'s web research, not from this skill.
    `gain_character` is a four-bucket enum, not a model name.
+3b. **No playing-technique claims.** Never label a take "palm-muted",
+   "gallop", "fingerpicked", "sweep-picked", "tremolo-picked" — the
+   fingerprint does not measure technique, and a song's/artist's
+   reputation is not evidence. Describe only what the analyzer reports
+   (`dynamics_profile`, crest factor, transient density) or what is
+   directly visible in the spectrogram. If you infer from a signal, make
+   the chain explicit ("crest 15 dB ⇒ gaps between hits"), never jump to
+   a named technique. (`openrig-tone-builder` carries the full rule.)
 4. **Heuristic section labels only.** Sections are tagged with
    `tone_profile + dynamics_profile + presence`. Never `verse`, `chorus`,
    `bridge`, `solo` as labels — that requires music-theoretic structure
