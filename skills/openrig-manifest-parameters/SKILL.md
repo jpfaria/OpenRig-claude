@@ -94,8 +94,13 @@ knob-named axis (`gain`/`bass`/`treble`/`volume`/`mid`/`presence`/`master`/
 
 1. **They are knob POSITIONS** → decode to numbers (per the rules above;
    qualitative `low`/`mid`/`high` = `3`/`5`/`8`, absent = `-1`).
-2. **They are NOT positions but VOICINGS / CHANNELS / GAIN-STAGES / MODES /
-   INPUTS / PEDALS** (`clean`/`crunch`/`od`, `lg`/`mg`/`hg`, `in1`/`in2`,
+   **ORDERED label positions are a KNOB.** If the values clearly RANK — an N-step
+   sweep written `low1`/`low2`/`mid1`/`mid2`/`high1`/`high2`/`high3` (Marshall JVM:
+   8 gain levels) or `lg`/`mg`/`hg` — they form ONE numeric knob: order them
+   lowest→highest and number `1..N`, keep the knob name. Don't reflexively dump an
+   ordered ramp into a `gain_stage` enum.
+2. **They are a genuinely DISCRETE, UNORDERED selector — VOICINGS / CHANNELS /
+   MODES / INPUTS / PEDALS** (`clean`/`crunch`/`od`, `in1`/`in2`,
    `standard`/`ultra_lo`/`ultra_hi`, pedal names) → **the axis is MISNAMED.**
    Rename it to the right enum (`voicing`/`channel`/`mode`/`input`/`gain_stage`/
    `pedal`); the string values stay (it is a selector, not a knob).
