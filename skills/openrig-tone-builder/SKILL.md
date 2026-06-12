@@ -510,6 +510,16 @@ When two sources disagree on knob values, prefer the one that names the song exp
 
 Always prefer NAM amps over Native amps when the song has a real amp model. The param schema for whichever IDs you pick comes from `openrig://plugins/{id}/params` in **Step 2.6**, not from this step.
 
+> ⛔ **AMP vs PREAMP vs CAB pairing rule (user law, 2026-06-12):**
+> a block whose schema says `effect_type: amp` is a **full-rig capture**
+> (head + cab baked in) — it NEVER takes a `cab` block after it. A `cab`
+> block (IR) pairs ONLY with `effect_type: preamp` captures. Decide by
+> reading `effect_type` from `openrig://plugins/{id}/params` in Step 2.6,
+> never by "era-correct cab pairing" intuition. The user's own chains
+> model the convention (full amp capture with no cab block; preamp
+> capture + cab IR). Pairing `amp` + `cab` double-cabinets the chain —
+> exactly the guess that wrecked the Your Love v1 build.
+
 **The Step 0 fingerprint is your primary input here.** Walk each
 field against the `blocks-reference.md` *recipes*:
 
@@ -1220,6 +1230,7 @@ read-render-compare over persistent artifacts.
 | "I'll fingerprint just one stem and reuse it for the other role" | Rhythm and lead have different gain stages, different time effects, different EQs. Fingerprint **each** WAV — that's what produces the role-specific presets the skill promises. |
 | "`tone3000-fetch` is heavy (issue → PR → qa_audit gate), I'll just substitute" | Cost is the user's decision, not yours. **Step 2.5 leads with `tone3000-fetch` as the primary proposal — substitution is a fallback, not a peer.** Propose import; if the user vetoes that path explicitly, then ask which specific substitute. Deciding for them = deciding that the tone doesn't matter — but they asked for THE tone, not A tone. |
 | "The closest already-installed capture is 'close enough'" | "Close enough" is the user's judgment, not yours. Ask in **Step 2.5** — and only after the `tone3000-fetch` import path is closed. Step 5 provenance documents authorized substitutions; it does not retroactively authorize yours. |
+| "The record used a 4x12, so I'll add the era-correct cab IR after the NAM amp" | If the capture's `effect_type` is `amp`, the cabinet is already IN the capture — an IR on top is a double cabinet (muffled v1, thrown away). Cab IRs pair only with `effect_type: preamp`. Read `effect_type` in Step 2.6; the real rig's cab list is research color, not a block to add. |
 | "I'll present `tone3000-fetch` and substitute side-by-side as (a)/(b) — let the user pick whichever" | NO. The two are not peers. The user has stated the rule: missing plugin → propose import first; substitution only when no other solution; even then ask. The ask leads with `tone3000-fetch`; substitution surfaces only if (a) is closed (no tone3000 result, fetch error, or user veto). |
 | "I'll auto-pick the closest substitute and just confirm with the user (y/n)" | The y/n shortcut collapses the candidate list to one option of your choosing. When substitution is genuinely the path forward (after `tone3000-fetch` is closed), present 3–5 candidates from `openrig://plugins` with matching `block_type` and adjacent `brand` / `display_name` — let the user pick. Auto-picking + asking confirmation is the same anti-pattern as auto-picking. |
 | "`blocks-reference.md` lists this `MODEL_ID`, so I can call `add_block`" | The doc lists what the project KNOWS how to load. `openrig://plugins` lists what THIS rig actually has loaded. The two diverge — always check the second one in **Step 2.5**. |
@@ -1374,6 +1385,12 @@ If the user picked the file-only path in Step −1:
   a hard-matched string in the registry.
 - ❌ Using a `preamp` block for a full amp song -- `preamp` is
   preamp-only (no power amp / cab). Songs almost always want `amp`.
+- ❌ **Adding a `cab` block after an `effect_type: amp` capture.** Full
+  amp captures already contain the cabinet — a cab IR on top is a double
+  cabinet. Cab IRs pair only with `preamp` captures. "The G12T-75 is the
+  era-correct cab for this amp" is not a reason; `effect_type` is the
+  only deciding signal (see the AMP vs PREAMP vs CAB pairing rule in
+  Step 2).
 - ❌ Silently switching from MCP to file (or vice versa) without the
   user's explicit Step −1 answer.
 - ❌ Stopping at "saved" when a reference stem was provided — run the
