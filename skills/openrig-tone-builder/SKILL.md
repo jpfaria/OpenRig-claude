@@ -754,7 +754,7 @@ Steps:
 7.  delay   / <delay_model_id>            enabled:<bool> intent: time from BPM math (recipe in blocks-reference.md per style)
 8.  reverb  / <reverb_model_id>           enabled:true   intent: room for rhythm, hall for lead; size + mix per analyzer RT60
 9.  dynamics/ <limiter_model_id>          enabled:true   intent: brick-wall safety on the bus
-10. gain    / <volume_model_id>            enabled:true   intent: per-preset output trim
+10. gain    / <volume_model_id>            enabled:true   intent: per-preset output trim — MAXIMIZED in Step 7 (measured peak ≈ -1.0 dBFS), never left at a timid default
 ```
 
 The **`intent:`** column is the recipe-class hint (what this block is *for*). The actual `MODEL_ID`s are picked in Step 2 (from `openrig://plugins` + recipes in `blocks-reference.md`); the actual param **paths, types, ranges, and enum options** come from `openrig://plugins/{id}/params` in **Step 2.6** — never from this template. Do NOT read names like "mix", "attack_ms", "threshold", "feedback" from this table and assume they are the schema paths for the chosen plugin; they are the *concepts* you'll set, and the actual path/type for each concept comes from Step 2.6 only.
@@ -916,6 +916,65 @@ Without the render→compare loop, you are building from research +
 analyzer fingerprint alone — that's an **educated guess**, not a
 measured match. Flag this in the chat reply so the user knows.
 
+### 7. Output level maximization — as loud as possible without clipping (MANDATORY before done)
+
+> ⛔ **Loudness law (user correction, 2026-06-12):** every preset
+> leaves the chain **as loud as possible without clipping**. Presets
+> shipped with a timid output trim are the documented failure mode —
+> the user has to crank everything downstream and the preset feels
+> broken next to the rig's other tones.
+
+Runs **after** the Step 6 tone loop converges (so level moves never
+pollute the tone iteration scores) and **before** the final
+`save_chain_preset` + "done" report:
+
+1. **Measure the latest render's peak** — deterministically, never by
+   guess. Use the analyzer fingerprint's loudness/peak field if it
+   exposes one, or any deterministic peak readout on the WAV (e.g.
+   `sox <wav> -n stat`, or a two-line soundfile/numpy max-abs in the
+   analyzer venv). Record the value in dBFS.
+2. **Target: peak in [-2.0, -0.5] dBFS, aim ≈ -1.0 dBFS.** Below
+   -3 dBFS is too quiet — raise the trim. At or above -0.3 dBFS is
+   clipping territory (intersample peaks) — back off.
+3. **Move ONLY the final volume/output-trim block (plan block 10).**
+   Compute the delta (`target_dB - measured_dB`), convert to the
+   block's scale, apply via `set_block_parameter_number`. Never touch
+   amp gain/master, boost level, or the limiter to fix loudness —
+   those are tone, and changing them invalidates the converged
+   match_score.
+4. **Re-render and re-measure to confirm.** The trim block sits AFTER
+   the brickwall limiter, so it absolutely can clip the output — the
+   confirmation render is the only proof the new peak landed in the
+   window. Iterate trim → render → measure until it does. These
+   confirmation renders reuse the current `<N>` artifacts' naming with
+   a `-level` suffix (`renders/<role>-v<N>-level.wav`); they are level
+   housekeeping, not tone iterations, and don't bump `<N>`.
+
+   **If the trim hits its schema maximum and the confirmed peak is
+   still below -3 dBFS**, the gap can't be closed at the trim — STOP
+   and report the measured numbers to the user ("trim at max, peak
+   still -X dBFS — upstream gain staging is eating the headroom").
+   Do NOT silently start raising amp master / boost level to
+   compensate: that re-opens the converged tone. Let the user decide
+   between accepting the level or re-entering the Step 6 loop with
+   level as an explicit constraint.
+5. **Save with the maximized trim** (`save_chain_preset`) and report
+   the final measured peak in the chat reply alongside the
+   match_score (e.g. "output peak -1.1 dBFS").
+
+**There is no "-18 dBFS standard target" in this skill.** -18 dBFS
+(and similar K-system / broadcast alignment levels) are mixing
+conventions for headroom inside a DAW session — a live rig preset is
+a finished sound, and the law here is maximize-without-clipping. If
+the converged render already peaks inside the window, leave the trim
+alone and just report the measured value.
+
+**File-only path:** without the runtime there is no render to
+measure, so level maximization is impossible. Set the trim to the
+recipe/default value and flag explicitly in the chat reply: "output
+level unverified — file-only build; on first MCP session run the
+Step 7 level pass, the preset may load quiet until then".
+
 ## Step 8 — Re-evaluation of an existing preset
 
 Use when the user asks to re-validate a preset that already exists
@@ -1035,6 +1094,11 @@ read-render-compare over persistent artifacts.
 - [ ] If a reference stem was provided, you ran the render+compare
       loop and either reached `diff.converged` OR documented the
       remaining gap in the chat reply.
+- [ ] After tone convergence you ran the **Step 7 level pass**: the
+      final render's measured peak lands in [-2.0, -0.5] dBFS, only
+      the output-trim block was moved, a confirmation render proved
+      the value, and the chat reply reports the measured peak. (MCP
+      path; on file-only you flagged "output level unverified".)
 - [ ] The render command pointed `--input` at the bundled
       `<openrig-source-root>/assets/audio/input.wav` — NOT a
       user-supplied DI path, NOT a random clean WAV.
@@ -1129,6 +1193,19 @@ read-render-compare over persistent artifacts.
   you reach `save_chain_preset` and have not yet rendered, you have
   NOT validated the preset — you have saved a guess. Restart from
   Step 6.
+- Declaring "done" with a render that peaks below -3 dBFS, or leaving
+  the output trim at its default because "the tone converged". Tone
+  convergence ≠ level done. **Step 7 is mandatory**: measure the peak,
+  maximize the trim into [-2.0, -0.5] dBFS, confirm with a re-render.
+  Quiet presets are the failure mode the user explicitly corrected
+  ("you're building the tones way too quiet", 2026-06-12).
+- Targeting -18 dBFS (or any K-system / broadcast alignment level) for
+  the preset's output, or LOWERING the trim of an already-quiet render
+  "to hit the standard". There is no -18 dBFS standard in this skill —
+  the law is maximize-without-clipping (Step 7).
+- Fixing loudness by raising amp gain/master, boost level, or limiter
+  params after tone convergence. Loudness moves live on the final
+  output-trim block ONLY; everything upstream is tone.
 - Asking the user for a DI WAV file. **You don't.** The DI is bundled
   at `<openrig-source-root>/assets/audio/input.wav`. Only the *wet
   reference stem* comes from the user.
@@ -1222,6 +1299,10 @@ read-render-compare over persistent artifacts.
 | "The mix's centroid says the guitar is dark, so I'll EQ-darken" | The mix's centroid is dominated by bass/drums/keys. Look at an isolated stem before darkening — or you will produce a muddy preset (real Clocks rebuild failed for exactly this reason). |
 | "I built it from research, no need to render+compare" | Research = educated guess. The render+compare loop is the only objective signal. If the user has a stem, run it. |
 | "I'll render+compare AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → compare → adjust → save → render → compare → ... until convergence. Reporting "done" after the FIRST save is reporting on a guess. |
+| "The standard output target is -18 dBFS, I'll trim to that" | Fabricated standard. -18 dBFS is a DAW/broadcast headroom convention, not a rig preset law. This skill's law is **maximize without clipping**: peak in [-2.0, -0.5] dBFS, aim ≈ -1.0 (Step 7). Trimming an already-quiet render DOWN to "-18 standard" is the exact baseline failure this rule exists to block. |
+| "Tone converged, the level is a matter of taste — I'll leave the trim at default" | Level is not taste, it's Step 7: measure the render's peak, raise the trim until the peak lands in the window, confirm with a re-render. A converged-but-quiet preset feels broken next to the rig's other tones. |
+| "I'll leave generous headroom (peak -10 dBFS) to be safe — the user can always turn it up" | The user CAN'T always turn it up — the preset competes with other bank slots at performance time, and "turn everything else up" is not a fix. The brickwall limiter is the safety; the trim's job is loudness. Maximize per Step 7. |
+| "The limiter protects the output, so I can push the trim as high as I want without measuring" | The trim block sits AFTER the limiter — it can clip regardless. The confirmation re-render + peak measurement in Step 7 is the only proof. Measured, never assumed. |
 | "The previous version of this preset worked without rendering, so I can skip this time" | Whoever told you that lied. **Every preset built without render+compare in this skill's history has been thrown away by the user.** Clocks v1 is the canonical example. No exceptions. |
 | "There's no `openrig render` available, I'll skip" | If `openrig render` is genuinely missing from PATH, STOP and tell the user — do not silently skip the gate. The CLI ships with OpenRig; check `which openrig` and `openrig --help` for the `render` subcommand. |
 | "The user didn't give me a DI, I can't render" | The user **never** gives you a DI. The canonical DI ships at `<openrig-source-root>/assets/audio/input.wav`. Reading the skill for the path is on you. |
