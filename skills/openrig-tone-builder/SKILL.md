@@ -41,59 +41,68 @@ existing active preset). See Step 3.
 exists.** Overwriting tone work the user spent time on is the worst-case
 failure mode for this skill. See Step 0 of the workflow.
 
-## ⛔ VALIDATION GATE — decide the validation MODE before you validate (read this first)
+## ⛔ VALIDATION GATE — generate a FAITHFUL match number (read this first)
 
-**The single most load-bearing decision in this whole skill is what
-KIND of reference the user gave you**, because it decides whether the
-analyzer's `match_score` measures *timbre* (a real score you can chase)
-or *note content* (a number that lies). Get this wrong and you produce
-the documented "Gravity" failure — a muffled, quiet preset with a
-fabricated 865 ms delay, "validated" by a score that was structurally
-incapable of converging. **Answer this question before you render
-anything:**
+The job of this skill is: **user gives a reference recording → you
+produce a preset whose TIMBRE is as faithful to it as possible.** You
+have no ears, so the only thing you can optimise toward is a **number**.
+The documented failure ("I send a WAV of the song and the tone is
+nothing like it") happens when that number is **meaningless** — and the
+number is meaningless for two specific, fixable reasons. Fix both before
+you trust any score:
 
-> **Is the reference (a) a REAMP of the SAME bundled DI, or (b) a REAL
-> recording?**
+> **1. Compare GUITAR against GUITAR.** A timbre number is only faithful
+> if both sides are the isolated guitar. If the reference is a **full
+> mix** (band + vocals + drums + bass + keys), its spectrum is dominated
+> by everything that is NOT the guitar — matching a guitar render to it
+> is hopeless, and you get "nothing like it". → **Isolate the guitar
+> from the reference FIRST** (source separation — see Step 0). Only ever
+> compare against the isolated-guitar reference. If you cannot isolate
+> it, say so and ask the user for an isolated stem — do **not** validate
+> against a full mix.
 
-**(a) Same-DI reamp** — the reference is OpenRig's bundled DI
-(`<openrig-source-root>/assets/audio/input.wav`) re-amped through real
-gear: **same notes, same timing, same performance, only the tone
-differs.** → `render(bundled DI) → compare → match_score` is a **valid
-timbre score**: both signals carry identical note content, so every
-delta the analyzer measures IS a tone delta. **Validation Mode A** —
-run the render→compare loop (Step 6 Mode A) and chase convergence; the
-analyzer is the primary validator.
+> **2. The number must measure TIMBRE, not the performance.** The
+> reference is almost never the bundled DI re-amped — it's a real take
+> with different notes, timing, dynamics and level. So the raw
+> `match_score` (which folds in note onsets, silence and loudness) can't
+> converge (the "Gravity" stem stalled at a 166→131 dB gap). → The
+> faithful number is the **level-normalised long-term spectral envelope
+> (LTAS) distance over the signal-bearing windows**: it ignores *which
+> notes were played* and *how loud*, so it isolates **tonal balance** —
+> and it converges. **That envelope distance is the number you pursue
+> and drive down** (via EQ + amp/gain class) until it is small. See Step
+> 6.
 
-**(b) Real recording** — an isolated studio/live stem, a commercial
-mix, a cover, a different take: **ANY performance that is NOT the
-bundled DI re-amped.** → rendering the bundled DI and comparing it to
-that recording compares **two different performances**. The analyzer
-now scores *note content, dynamics and silence* — different notes,
-different timing, gaps where one has sound and the other doesn't — **not
-timbre.** `match_score` **cannot converge on tone**, and iterating to
-raise it actively breaks the preset (the real "Gravity" stem was sparse
-sustained low notes + silence → centroid ~480 Hz → the loop low-passed
-to 750 Hz and matched the quiet RMS → muffled and quiet). **Validation
-Mode B** — `match_score` is **demoted to a directional hint at most:
-never a judge, never a gate, never something to iterate against.** The
-**primary validator is the EAR, with the user in the loop** (Step 6
-Mode B).
+**Bonus case — same-DI reamp.** If the reference genuinely IS OpenRig's
+bundled DI re-amped (same notes, same timing), the raw `match_score`
+*also* works and is tighter — use it as well. But you never *need* it:
+the LTAS envelope distance is the universal faithful number and is what
+you optimise in every case. Default to the envelope; treat a confirmed
+reamp as a bonus tighter signal.
 
-**If you cannot positively establish a same-DI reamp, you are in Mode
-B.** The bundled DI is one specific file; a user's "isolated stem of the
-song" is, by default, a real recording → Mode B. When you don't know,
-**ask once**: *"is this stem a reamp of OpenRig's bundled DI, or a real
-recording of the song? It changes how I validate."* Default to Mode B if
-they don't know. *(render in the user's language at runtime)*
+> ⛔ **You (the agent) cannot hear. Your own "ear" is NEVER the basis.**
+> You cannot decide a render "sounds muffled", "dark", or "the delay is
+> too long" — asserting any such verdict from yourself is fabrication
+> (the same prohibition as the no-suppositions HARD RULE in Step 0).
+> **You optimise the faithful NUMBER. The ONLY ear that counts is the
+> USER'S, and it enters ONLY when the user explicitly says it's bad**
+> ("tá ruim", "muffled", "too dark", "delay too long"). Until then you
+> keep driving the number down — you do NOT invent an ear opinion to
+> stop early or to change course. When the user *does* say it's bad,
+> that specific complaint overrides the number and you act on it.
 
-**Either way the render+compare is still MANDATORY when a reference
-exists** — it is never a closing nicety, and saving a preset with no
-validation pass at all is saving a blind guess (the Clocks v1 failure).
-What changes between modes is **who the judge is**: the analyzer
-(Mode A) or the ear + user (Mode B, with the analyzer's *normalized
-spectral shape* as a directional guide — see Step 6 Mode B). You may NOT
-declare the preset done until you have run the mode-appropriate loop and
-either converged (Mode A) or gotten the user's ear sign-off (Mode B).
+**Acceptance bar: proximity ≥ 95%.** Express the faithful number as a
+**proximity %** (100% = identical normalised envelope). You may NOT
+declare the preset done until proximity is **≥ 95%** — that is the bar,
+not "best I could get". The render+compare is MANDATORY whenever a
+reference exists (saving without it is a blind guess — the Clocks v1
+failure). If you iterate and proximity **plateaus below 95%**, that is
+**not done**: change the approach (different amp/cab capture, more EQ
+bands, revisit the gain class) and keep going; only if you genuinely
+cannot reach 95% do you STOP and report the exact proximity to the user
+as a shortfall — never ship a sub-95% preset as "done". The user's ear
+can still override at any point, but their *silence* never lowers the
+95% bar.
 
 If the user explicitly says they have **no reference at all**, declare
 that **out loud in the chat** before Step 8 (`save_chain_preset`) — "no
@@ -340,6 +349,14 @@ before you treat any single number as truth.
 
 How:
 
+0. **Guitar-only check (prep for a faithful number).** The reference
+   must be the **isolated guitar** — a timbre comparison against a full
+   band is meaningless (the spectrum is dominated by drums/bass/vocals).
+   If the user already sends an isolated guitar stem (the normal case),
+   proceed. If they send a **full mix**, isolate the guitar first
+   (source separation — e.g. `demucs`) and use only the separated
+   guitar as the reference; if you cannot separate it, STOP and ask for
+   an isolated stem rather than validating against a mix.
 1. For each reference WAV the user mentioned, invoke
    `openrig:openrig-tone-analyzer` with the file path. The skill writes
    a JSON fingerprint plus spectrogram PNGs to disk and returns the
@@ -349,12 +366,12 @@ How:
 2. **Read every fingerprint JSON before opening any research URL.** The
    fingerprint tells you:
    - EQ **shape** to lean toward (centroid + band_energy → parametric EQ
-     direction — a hint cross-checked against the spectrogram + ear, not
+     direction — a hint cross-checked against the spectrogram + LTAS, not
      a hard target; see reliability caveat below)
    - Gain stage (gain_character → clean / crunch / high gain)
    - Time effects — **low-confidence, do NOT set blocks from these**;
      `time_fx` (delay time/feedback, reverb type) is artifact-prone, so
-     delay/reverb come from research + ear (Step 2, Step 6 Mode B)
+     delay/reverb come from research (Step 2, Step 6)
    - Role hint (source.kind → which preset name to use, and whether
      to split into multiple presets)
 3. If multiple stems were provided (rhythm + lead, or several solos),
@@ -386,18 +403,21 @@ the scalar fields. Treat them by tier:
 
 | Field | Trust | How to use it |
 |---|---|---|
-| `band_energy` / normalized **LTAS shape** over signal-bearing windows | **Usable as SHAPE** | Directional EQ guide ("more energy 2–4 kHz") — cross-check against spectrogram + ear. Never a hard target. |
-| `centroid` | **Fragile** | On a sparse/separated stem it tracks *which notes were held*, not timbre. Do not low-pass off a low centroid; confirm against the spectrogram + ear. |
+| `band_energy` / normalized **LTAS shape** over signal-bearing windows | **Usable as SHAPE** | Directional EQ guide ("more energy 2–4 kHz") — cross-check against the spectrogram. Never a hard target. |
+| `centroid` | **Fragile** | On a sparse/separated stem it tracks *which notes were held*, not timbre. Do not low-pass off a low centroid; confirm against the spectrogram + LTAS shape. |
 | `RMS` / loudness | **Never a target** | Reflects performance dynamics + mastering, not tone. Level is maximized in Step 7, never matched to the ref. |
-| `time_fx` (delay/reverb) | **Low-confidence** | Artifact-prone (reverb tail → "long delay"; hall → "spring"). Delay/reverb come from research + ear (Step 2, Step 6 Mode B), not from this field. |
+| `time_fx` (delay/reverb) | **Low-confidence** | Artifact-prone (reverb tail → "long delay"; hall → "spring"). Delay/reverb come from research (Step 2, Step 6), not from this field. |
 | `gain_character` / `tone_profile` | Usable | Clean/crunch/high-gain class is robust. |
 
-**The cross-check is always: spectrogram PNG + your ear, not the scalar
-alone.** When a number and the spectrogram/ear disagree, the
-spectrogram + ear win. This is the structural reason Mode B (real
-recording) validates by ear: the scalars that *would* let a machine
-judge are exactly the ones a real, sparse, or separated reference
-corrupts.
+**The cross-check is always: spectrogram PNG + the normalized LTAS
+shape, not a single scalar.** When a fragile scalar (`centroid`) and the
+spectrogram/LTAS-shape disagree, the spectrogram + shape win. This is
+the structural reason the validation number is the **normalised LTAS
+envelope proximity**, not a raw score: the scalars that *would* let a
+raw score judge tone cleanly are exactly the ones a real, sparse, or
+separated reference corrupts.
+(You never substitute your own ear for these — you have none; the
+user's ear is the only human override.)
 
 ### ⛔ HARD RULE — no suppositions about what the reference contains
 
@@ -602,9 +622,9 @@ field against the `blocks-reference.md` *recipes*:
 > gets labelled "spring". **Derive delay and reverb from research +
 > knowledge of the song instead** (Step 1 — e.g. dotted-eighth at the
 > song BPM for a delay-driven part, hall vs room from the recording
-> context) and refine **by ear** (Step 6 Mode B). Treat `time_fx` as a
-> *weak corroborating signal* only — if research says no delay and
-> `time_fx` claims one, trust research and your ear.
+> context) and leave the fine-tune to the **user's verdict** (Step 6
+> Step 6). Treat `time_fx` as a *weak corroborating signal* only — if
+> research says no delay and `time_fx` claims one, trust research.
 
 > ⛔ **`centroid` / `RMS` are unreliable on a sparse, separated, or
 > leaky stem.** A stem that is mostly sustained low notes + silence (or
@@ -613,7 +633,8 @@ field against the `blocks-reference.md` *recipes*:
 > low-passes a bright tone into mud (the "Gravity" 750 Hz low-pass).
 > Read `centroid`/`band_energy` as **directional EQ shape over the
 > signal-bearing windows**, cross-checked against the spectrogram PNG
-> and your ear — never as a hard EQ target. `RMS` is **never** an EQ or
+> and the normalized LTAS — never as a hard EQ target. `RMS` is
+> **never** an EQ or
 > level target (level is maximized in Step 7, not matched). See Step 0's
 > reliability caveat.
 
@@ -943,17 +964,17 @@ two surfaces:
    snapshots, `eval.md`) — so they know where to find it for re-eval,
    backup, or sharing.
 
-### 6. Render and validate (MANDATORY before "done") — pick the mode from the VALIDATION GATE
+### 6. Render and drive the faithful number (MANDATORY before "done")
 
-> ⛔ **The mode comes from the VALIDATION GATE at the top of the file.**
-> **Mode A** (same-DI reamp) → the analyzer is the judge; chase
-> convergence. **Mode B** (real recording) → the **ear + user** is the
-> judge; the analyzer is a directional shape-guide only. The render
-> itself is mandatory in both modes — what differs is who decides
-> "close enough". Run it BEFORE declaring done.
-
-Steps 6.0–6.2 (render + write artifacts) are **identical** in both
-modes; the judging in 6.3+ diverges.
+> ⛔ **You optimise ONE number to a hard bar: drive the
+> level-normalised spectral-envelope (LTAS) proximity between the render
+> and the isolated-guitar reference (over the signal-bearing windows) to
+> ≥ 95%.** That number measures **timbre** (tonal balance), invariant to
+> which notes were played and to level — so it converges even though the
+> bundled-DI render is a different performance from the real recording.
+> You drive it up with EQ + amp/gain class. **Below 95% is not done.**
+> You have no ears; the **user's ear is the only override, and only when
+> the user says it's bad**. Run this BEFORE declaring done.
 
 **6.0 — Render the bundled DI through the just-saved preset.** Write
 directly to the persistent eval dir from **Step 0a**, NOT `/tmp/`:
@@ -963,16 +984,22 @@ directly to the persistent eval dir from **Step 0a**, NOT `/tmp/`:
 starts at `1`, or `last_existing_N + 1` when reusing a dir. You never
 ask for a DI; only the wet reference comes from the user.
 
-**6.1 — Run the analyzer over the render and the ref.** Compare against
-the **persistent** `refs/<role>.wav` (copied in Step 0a — never the
+**6.1 — Compute the faithful number.** Compare the render against the
+**persistent** isolated-guitar `refs/<role>.wav` (Step 0a — never the
 user's original path): `.venv/bin/python scripts/compare.py
 <openrig-evaluations-root>/<song-slug>/refs/<role>.wav
 <openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav --output
-<openrig-evaluations-root>/<song-slug>/diffs/<role>-v<N>.json`. If
-`compare.py` lacks `--output`, capture stdout and write the JSON to the
-persistent `diffs/<role>-v<N>.json` yourself. **Also generate the
-spectrogram PNGs** for render and ref (the analyzer writes them) — in
-Mode B the spectrogram and your ear, not the score, are what you read.
+<openrig-evaluations-root>/<song-slug>/diffs/<role>-v<N>.json`. The
+number that matters is the **level-normalised LTAS / spectral-envelope
+distance over the signal-bearing windows** (silence trimmed, RMS
+normalised out, note content averaged out), expressed as a **proximity %**
+(100% = identical envelope). If the analyzer reports a raw `match_score`
+that folds in onsets/silence/level, **do not chase that** — chase the
+envelope proximity (the analyzer exposes it as the spectral/LTAS diff;
+if it doesn't, it's an analyzer gap — flag it). Also write the
+spectrogram PNGs for render and ref. **Bonus:** if the reference is a
+confirmed same-DI reamp, the raw `match_score` is also valid (tighter) —
+use it too.
 
 **6.2 — Snapshot the preset YAML** after every `save_chain_preset` in
 the loop: `cp <openrig-user-data-root>/presets/"<Song> — <Artist>
@@ -982,66 +1009,41 @@ live YAML carries only the latest version; the snapshot is the only way
 to re-render a historic iteration. On accept, also `cp` to
 `presets/<role>-final.yaml`.
 
-#### Mode A — same-DI reamp: chase `match_score`
+**6.3 — Drive the envelope proximity to ≥ 95%.** Read the per-band
+envelope delta from `diffs/<role>-v<N>.json`: where the ref's normalised
+spectrum has more (or less) energy than the render, that band is the EQ
+move ("ref has +4 dB around 2–4 kHz vs render → raise that parametric-EQ
+band"). Apply **one** move (the relevant `set_block_parameter_*`),
+re-render (bump `<N>`), re-compute the proximity %. **Iterate until
+proximity ≥ 95%.** If it **plateaus below 95%** (two iterations with no
+gain), the EQ alone isn't enough — **change the approach**: a different
+amp/cab capture (the gain class or cabinet may be wrong), an added boost,
+more EQ bands. Keep going until ≥ 95%. Only if you genuinely cannot
+reach 95% do you STOP and report the exact proximity as a shortfall —
+**never call a sub-95% preset done**. Report the final proximity % and
+the spectral plots. **Ignore any RMS/level delta** — level is Step 7's
+job, never matched to the ref. Do **not** read raw `centroid` or
+`time_fx` as truth (Step 0 caveat, Step 2 `time_fx` rule).
 
-The ref and the render carry identical note content, so the analyzer
-measures pure tone difference. Here `match_score`/`diff.json` IS the
-judge.
+**6.4 — Time-based FX come from research, never `time_fx`.** Delay and
+reverb are temporal — they are NOT in the spectral envelope, so the
+number can't set them. Derive delay time/feedback and reverb type/size
+from **research + knowledge of the song** (Step 1 — e.g. dotted-eighth at
+the song BPM). The fingerprint's `time_fx` is **low-confidence** (a
+reverb tail reads as a long delay; a smooth hall reads as "spring") and
+must not drive these blocks. See Step 2.
 
-**6.3A** Read `diffs/<role>-v<N>.json`. The top 2-3 priority-sorted
-`recommendations` are concrete tone moves ("raise EQ band 4 gain by
-3 dB", "delay time wrong by 80 ms", "needs more high-shelf").
+**6.5 — The user's ear is the only override; yours does not exist.** You
+drive the number; you never assert a sonic verdict yourself ("muffled /
+dark / delay too long" from *you* is fabrication — same prohibition as
+Step 0's no-suppositions rule). The **only** ear that redirects the
+build is the **user's**, and **only when they actually say it's bad** —
+then that complaint overrides the number and you act on it directly
+(the specific fix). Until then, keep driving the envelope distance down.
 
-**6.4A** **Apply ONE recommendation at a time** (the relevant
-`set_block_parameter_*`), re-render (bump `<N>`), re-compare. Iterate
-until `diff.converged` is true OR `match_score` plateaus across two
-consecutive iterations — then report the gap and score to the user.
-**Ignore any RMS/level recommendation** — level is Step 7's job, never
-matched to the ref.
-
-#### Mode B — real recording: the EAR is the judge, the analyzer is a shape-guide
-
-The ref is a different performance, so `match_score` scores *what notes
-were played and when*, not *how the rig sounds*. **Do NOT iterate to
-raise `match_score`. Do NOT treat any single `match_score` number as
-pass/fail.** Instead:
-
-**6.3B — Use the analyzer for SHAPE, not score.** The one analyzer
-output that survives a performance mismatch is the **normalized
-long-term average spectrum (LTAS) over the signal-bearing windows**
-(silence trimmed) — it describes the *tonal balance* (where the energy
-sits across the band) independent of which notes were played and how
-loud. Read the LTAS **shape** of the render vs the ref (and the
-spectrograms from 6.1) as a **directional EQ hint** — "the ref has more
-energy around 2–4 kHz, mine is darker there" → a candidate parametric-EQ
-move. It is a hint, **not** a target to converge on, and you confirm
-every move by ear in 6.4B. **Do not** read `centroid`, raw `RMS`, or
-`time_fx` as truth here — see the reliability caveat in Step 0 and the
-`time_fx` rule in Step 2; a sparse/separated/leaky stem distorts all
-three.
-
-**6.4B — Validate by ear, with the user in the loop.** Render, listen,
-and present the result to the user for a verdict — playing the
-render and/or describing what you changed, and asking a *specific*
-question ("does the delay feel right now, or still too long?" / "is it
-still muddy in the low-mids?"). The **user's ear is the primary
-validator in Mode B** — when the user says "muffled", "too dark", "delay
-too long", that is the authoritative signal; act on it directly. You may
-pair it with the LTAS shape hint ("you're right it's dark — the ref has
-more 3 kHz, I'll lift the presence band"), but the ear leads and the
-number never overrides it. Iterate ear-move → render → user check until
-the **user signs off**, then report.
-
-**6.5B — Derive time-based FX from research, not from `time_fx`.** Set
-delay time/feedback and reverb type/size from **research + knowledge of
-the song** (Step 1) — e.g. dotted-eighth at the song BPM — and refine by
-ear. The fingerprint's `time_fx` is **low-confidence** (a reverb tail
-reads as a long delay; a smooth hall reads as "spring") and must not
-drive these blocks. See Step 2.
-
-Without running the mode-appropriate loop, you are shipping research +
-fingerprint alone — an **educated guess**, not a validated preset. Say
-so in the chat reply if you could not complete it.
+Without running this loop, you are shipping research + fingerprint
+alone — an **educated guess**, not a validated preset. Say so in the
+chat reply if you could not complete it.
 
 ### 7. Output level maximization — as loud as possible without clipping (MANDATORY before done)
 
@@ -1051,9 +1053,9 @@ so in the chat reply if you could not complete it.
 > the user has to crank everything downstream and the preset feels
 > broken next to the rig's other tones.
 
-Runs **after** the Step 6 tone loop completes (converged in Mode A, or
-user ear sign-off in Mode B) — so level moves never pollute the tone
-work — and **before** the final `save_chain_preset` + "done" report.
+Runs **after** the Step 6 tone loop completes (envelope proximity ≥ 95%,
+or the user signed off) — so level moves never pollute the tone work —
+and **before** the final `save_chain_preset` + "done" report.
 Level is **always** maximized here regardless of mode, and **never**
 matched to the reference's RMS (a real reference is often quiet):
 
@@ -1220,18 +1222,21 @@ read-render-compare over persistent artifacts.
       `add_block` (they are rig-wide commands, not chain blocks).
 - [ ] You did NOT touch any `input`, `output`, or `insert` block on
       the chain — those are the user's rig wiring.
-- [ ] You classified the reference at the VALIDATION GATE: same-DI
-      reamp (Mode A) or real recording (Mode B). When unsure you asked
-      the user once and defaulted to Mode B.
-- [ ] If a reference was provided, you ran the mode-appropriate Step 6
-      loop: **Mode A** — chased `match_score` to `diff.converged` or a
-      reported plateau; **Mode B** — judged by ear with the user in the
-      loop (LTAS shape as a hint only), got the user's sign-off, and did
-      NOT iterate on `match_score`.
+- [ ] The reference you compared against is the **isolated guitar** (you
+      separated it from a full mix if needed, or stopped and asked for a
+      stem) — never a full-band mix.
+- [ ] If a reference was provided, you drove the **level-normalised LTAS
+      envelope proximity %** to **≥ 95%** (re-rendering per iteration),
+      and did NOT chase a raw `match_score` that folds in onsets/silence/
+      level. If it plateaued below 95% you changed the approach
+      (amp/cab/boost/EQ) and only reported a shortfall if 95% was
+      genuinely unreachable — you did NOT call a sub-95% preset done. You
+      never asserted a sonic verdict of your own; the user's ear
+      redirected the build ONLY when the user said it's bad.
 - [ ] You did NOT set the delay/reverb blocks from the fingerprint's
       `time_fx`, did NOT EQ-darken off a raw `centroid`, and did NOT
-      match the reference's RMS. Delay/reverb came from research + ear;
-      EQ shape was cross-checked against spectrogram + ear; level was
+      match the reference's RMS. Delay/reverb came from research;
+      EQ shape was cross-checked against spectrogram + LTAS; level was
       maximized in Step 7.
 - [ ] After tone convergence you ran the **Step 7 level pass**: the
       final render's measured peak lands in [-2.0, -0.5] dBFS, only
@@ -1325,39 +1330,43 @@ read-render-compare over persistent artifacts.
   `save_chain_preset`).
 - Writing a YAML preset file to disk *without* the user having picked
   the file-only path in Step −1.
-- Reporting "preset saved" / "done" to the user WITHOUT having run the
-  mode-appropriate validation loop (Step 6) when any reference exists.
-  **This is the failure mode the user called out explicitly**: "you're
-  missing the most important thing. you should run the render". The
-  render is mandatory in BOTH modes; if you reach `save_chain_preset`
-  and have not yet rendered + judged (analyzer in Mode A, ear+user in
-  Mode B), you have saved a guess. Restart from Step 6.
-- **Treating a REAL recording as if `match_score` judged its timbre.**
-  If the reference is not a same-DI reamp, iterating to raise
-  `match_score` is chasing note-content/silence, not tone — it produced
-  the documented "Gravity" disaster (low-pass to 750 Hz, quiet output,
-  fabricated 865 ms delay, "converged" gap 166→131 dB that never
-  meant anything). In Mode B the ear + user is the judge; `match_score`
-  is a directional hint at most. Check the VALIDATION GATE before you
-  iterate on any number.
-- **Forbidding or dismissing the user's ear in Mode B.** When the
-  reference is a real recording and the user says "it sounds muffled" /
-  "too dark" / "the delay is too long", that is the **authoritative**
-  validation signal — act on it. Replying "the match_score says it's
-  fine" / "I can't judge by ear, the methodology decides objectively"
-  is the exact inversion this rewrite fixed. The number that "decides
-  objectively" only decides for a same-DI reamp.
+- Reporting "preset saved" / "done" to the user WITHOUT having driven
+  the envelope-proximity loop (Step 6) to ≥ 95% when any reference
+  exists. **This is the failure mode the user called out explicitly**:
+  "you're missing the most important thing. you should run the render".
+  If you reach `save_chain_preset` and have not yet rendered + measured
+  proximity to ≥ 95%, you have saved a guess. Restart from Step 6.
+- **Asserting your OWN sonic verdict — "it sounds muffled / dark / the
+  delay is too long".** You (the agent) cannot hear. Any such judgement
+  coming from you is fabrication (same prohibition as Step 0's
+  no-suppositions rule). The basis you act on is the **measurement**;
+  the only ear that redirects the build is the **user's**, and only when
+  the user actually says it's bad. Do not invent an ear opinion to stop
+  the loop early or to justify an EQ move.
+- **Chasing the raw `match_score` instead of the envelope proximity.**
+  Against a real recording the raw score folds in note onsets, silence
+  and level, so it cannot converge (the "Gravity" stem stalled at a
+  166→131 dB gap). The number you drive is the **level-normalised LTAS
+  envelope proximity %**, and the bar is **≥ 95%**. Reporting a raw-score
+  "plateau" as done, or calling a sub-95% envelope proximity done, is the
+  failure — change the gear/EQ until proximity hits 95%.
+- **Dismissing the user's ear when the user says it's bad.** When the
+  user says "it sounds muffled" / "too dark" / "the delay is too long",
+  that complaint **overrides the number** — act on it directly. Replying
+  "the match_score says it's fine" and ignoring the user is forbidden.
+  (This is the ONE place the ear enters: the user's, on the user's
+  word.)
 - **Setting the delay/reverb blocks from `time_fx`.** The fingerprint's
   `time_fx.delay_time_ms` / `delay_feedback` / `reverb` are
   artifact-prone (a reverb tail reads as an 865 ms delay; a smooth hall
-  reads as "spring"). Delay/reverb come from research + the song + ear
-  (Step 2, Step 6 Mode B). `time_fx` is a weak corroborator, never the
+  reads as "spring"). Delay/reverb come from research + the song
+  (Step 2, Step 6). `time_fx` is a weak corroborator, never the
   source of truth.
 - **Low-passing / EQ-darkening off a low `centroid` on a sparse or
   separated stem.** A stem of sustained low notes + silence has a low
   centroid because of *which notes were held*, not because the guitar is
   dark. Read `centroid`/`band_energy` as directional shape cross-checked
-  against the spectrogram + ear — never as a hard EQ target.
+  against the spectrogram + LTAS — never as a hard EQ target.
 - **Matching the reference's RMS / level.** A real reference is often
   quiet; matching its RMS ships a quiet preset. Level is ALWAYS
   maximized in Step 7, never matched. Any `diff.json` RMS/level
@@ -1466,15 +1475,19 @@ read-render-compare over persistent artifacts.
 | "It's faster to remove the existing FX blocks and replace them" | Faster, yes, and destructive to the active preset. Use `apply_rig_nav Preset(-1)` to switch to a new empty slot first. |
 | "The user's `tuner_chromatic` mention means I should add it as a block" | Tuner is a rig-wide utility; it has its own enable command. The preset doesn't own it. |
 | "The mix's centroid says the guitar is dark, so I'll EQ-darken" | The mix's centroid is dominated by bass/drums/keys. Look at an isolated stem before darkening — or you will produce a muddy preset (real Clocks rebuild failed for exactly this reason). |
-| "I built it from research, no need to render" | Research = educated guess. The render is mandatory both modes; the only validated preset is one you rendered and judged (analyzer Mode A, ear+user Mode B). If the user has a reference, run it. |
-| "I'll render+judge AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → judge → adjust → … until done (converged in Mode A, user sign-off in Mode B). Reporting "done" after the FIRST save is reporting on a guess. |
-| "The reference is a stem of the song, so render→compare→match_score will validate the timbre" | Only if the stem is a reamp of the bundled DI. A real recording is a different performance → `match_score` measures note content + silence, not tone. That is Mode B: the ear + user judges, `match_score` is a hint at most. Chasing it produced the "Gravity" muffled-and-quiet failure. Check the VALIDATION GATE first. |
-| "`match_score` is low after several iterations — I'll keep applying recommendations until it converges" | In Mode B it will NOT converge — it's scoring different notes, not tone (the real case plateaued at a 131 dB gap that meant nothing). Stop iterating on the number; switch to ear + user verdict. Endless match_score chasing IS the failure. |
-| "The user says it sounds muffled, but the match_score is fine — I'll trust the number" | In Mode B the user's ear is the authoritative validator and the number is not measuring tone. "Muffled / too dark / delay too long" is a direct instruction — act on it. Trusting the number over the ear is the exact inversion this skill was rewritten to kill. |
-| "The fingerprint says delay 865 ms / 39% — I'll set the delay block to that" | `time_fx` is artifact-prone: that 865 ms was a *reverb tail* misread as delay, and the "spring" was a smooth hall. Delay/reverb come from research + the song + ear, never from `time_fx`. It is a weak corroborator only. |
-| "The stem's centroid is ~480 Hz, so the tone is dark — I'll low-pass / EQ-darken" | On a sparse or separated stem the centroid tracks *which notes were held* (sustained low notes + silence), not timbre. Low-passing off it muffled the real "Gravity" build to 750 Hz. Read centroid as directional shape, cross-check the spectrogram + ear, never low-pass off the scalar. |
+| "I built it from research, no need to render" | Research = educated guess. The render is mandatory both modes; the only validated preset is one you rendered and measured. If the user has a reference, run it. |
+| "I'll render+measure AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → measure proximity → adjust → … until proximity ≥ 95% (or the user signs off). Reporting "done" after the FIRST save is reporting on a guess. |
+| "Proximity is stuck at 88%, that's close enough / the best I can get" | 95% is the bar, not "best effort". EQ alone plateauing means the gear is wrong — change the amp/cab capture, gain class, or add a boost, and keep going. Only report a shortfall if 95% is genuinely unreachable; never ship sub-95% as done. |
+| "The user sent the whole song, I'll fingerprint/compare against that" | A full mix is dominated by drums/bass/vocals — matching a guitar render to it is hopeless ("nothing like it"). Isolate the guitar first (source separation); if you can't, ask for an isolated stem. Only ever compare guitar-against-guitar. |
+| "I'll chase the analyzer's raw `match_score`" | Against a real recording the raw score folds in note onsets, silence and level, so it can't converge (the "Gravity" 166→131 dB stall). Chase the **level-normalised LTAS envelope proximity %** — it measures timbre and reaches ≥ 95%. |
+| "It sounds muffled to me, so I'll EQ-brighten" / "the delay sounds too long, I'll shorten it" | **You have no ears.** You cannot have a sonic opinion — asserting one is fabrication. Act on the **measurement**; the only ear is the **user's**, and only when *they* say it's bad. Do not invent an ear verdict to drive a move. |
+| "The stem is a real recording so the number is useless — I'll just judge by ear instead" | Wrong both ways. The number is NOT useless — the **level-normalised LTAS envelope proximity** measures timbre and reaches ≥ 95% even across performances; it's the only thing you can act on because you can't hear. There is no "judge by ear" for you; the user's ear is the sole human override, on the user's word. |
+| "The raw `match_score` is climbing toward done" | The raw score conflates note/silence/level and can't converge on a real recording (the "Gravity" 166→131 dB stall). Drive the **envelope proximity %** to ≥ 95% instead — that is the bar, and it does converge. |
+| "The user says it sounds muffled, but the measurement looks fine — I'll trust the number" | When the **user** says it's bad, that complaint **overrides** the number — act on it directly. The measurement is your *default* basis; the user's stated verdict is the override. Ignoring the user is forbidden. |
+| "The fingerprint says delay 865 ms / 39% — I'll set the delay block to that" | `time_fx` is artifact-prone: that 865 ms was a *reverb tail* misread as delay, and the "spring" was a smooth hall. Delay/reverb come from research + the song, never from `time_fx`. It is a weak corroborator only. |
+| "The stem's centroid is ~480 Hz, so the tone is dark — I'll low-pass / EQ-darken" | On a sparse or separated stem the centroid tracks *which notes were held* (sustained low notes + silence), not timbre. Low-passing off it muffled the real "Gravity" build to 750 Hz. Read centroid as directional shape, cross-check the spectrogram + LTAS, never low-pass off the scalar. |
 | "The reference RMS is quiet, so I'll match it / leave the preset quiet" | Level is never matched to the ref — a real reference is often quiet by performance or mastering. Step 7 always maximizes the output trim without clipping, independently of the reference. Matching RMS ships the broken-quiet preset the loudness law exists to prevent. |
-| "I'll render the bundled DI and compare it to the real stem to get an objective timbre number" | The bundled DI is a *different performance* from the real stem. Comparing them measures note/silence content, not tone — structurally it cannot converge on timbre. That comparison is Mode B's *shape hint* (normalized LTAS over signal windows) at most; the ear + user is the judge. |
+| "I'll treat the bundled-DI-vs-real-stem raw `match_score` as the target" | The bundled DI is a *different performance* from the real stem, so the raw score conflates note/silence with tone and can't converge. The target is the **level-normalised LTAS envelope proximity ≥ 95%** — that isolates timbre and does converge. |
 | "The standard output target is -18 dBFS, I'll trim to that" | Fabricated standard. -18 dBFS is a DAW/broadcast headroom convention, not a rig preset law. This skill's law is **maximize without clipping**: peak in [-2.0, -0.5] dBFS, aim ≈ -1.0 (Step 7). Trimming an already-quiet render DOWN to "-18 standard" is the exact baseline failure this rule exists to block. |
 | "Tone converged, the level is a matter of taste — I'll leave the trim at default" | Level is not taste, it's Step 7: measure the render's peak, raise the trim until the peak lands in the window, confirm with a re-render. A converged-but-quiet preset feels broken next to the rig's other tones. |
 | "I'll leave generous headroom (peak -10 dBFS) to be safe — the user can always turn it up" | The user CAN'T always turn it up — the preset competes with other bank slots at performance time, and "turn everything else up" is not a fix. The brickwall limiter is the safety; the trim's job is loudness. Maximize per Step 7. |
