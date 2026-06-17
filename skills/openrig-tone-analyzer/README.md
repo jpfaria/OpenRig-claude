@@ -18,10 +18,17 @@ cd skills/openrig-tone-analyzer
 ./bootstrap.sh                          # idempotent venv setup
 .venv/bin/python scripts/analyze.py /path/to/track.wav
 .venv/bin/python scripts/compare.py /path/to/ref.wav /path/to/wet.wav
+.venv/bin/python scripts/eq_match.py /path/to/ref.wav /path/to/wet.wav --gains 0,0,0,0,0,0,0,0
 ```
 
-Both commands print the resolved output directory on their last line. Open
-the PNGs to inspect; feed the JSON to your downstream consumer.
+`analyze.py`/`compare.py` print the resolved output directory on their last
+line. Open the PNGs to inspect; feed the JSON to your downstream consumer.
+
+`eq_match.py` is a pure measurement step (no rig, no network): given the
+reference, the wet render, and the EQ's current 8 band gains, it emits the
+next gains (`new_gains`) that move the render's normalised LTAS shape
+toward the reference, plus `total_gap_db`. The `openrig-tone-builder` Step
+6.3 loop applies the gains, re-renders, and repeats until the gap plateaus.
 
 ## Schema
 

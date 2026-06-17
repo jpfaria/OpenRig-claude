@@ -1009,21 +1009,51 @@ live YAML carries only the latest version; the snapshot is the only way
 to re-render a historic iteration. On accept, also `cp` to
 `presets/<role>-final.yaml`.
 
-**6.3 — Drive the envelope proximity to ≥ 95%.** Read the per-band
-envelope delta from `diffs/<role>-v<N>.json`: where the ref's normalised
-spectrum has more (or less) energy than the render, that band is the EQ
-move ("ref has +4 dB around 2–4 kHz vs render → raise that parametric-EQ
-band"). Apply **one** move (the relevant `set_block_parameter_*`),
-re-render (bump `<N>`), re-compute the proximity %. **Iterate until
-proximity ≥ 95%.** If it **plateaus below 95%** (two iterations with no
-gain), the EQ alone isn't enough — **change the approach**: a different
-amp/cab capture (the gain class or cabinet may be wrong), an added boost,
-more EQ bands. Keep going until ≥ 95%. Only if you genuinely cannot
-reach 95% do you STOP and report the exact proximity as a shortfall —
-**never call a sub-95% preset done**. Report the final proximity % and
-the spectral plots. **Ignore any RMS/level delta** — level is Step 7's
-job, never matched to the ref. Do **not** read raw `centroid` or
-`time_fx` as truth (Step 0 caveat, Step 2 `time_fx` rule).
+**6.3 — Run the AUTOMATIC auto-EQ-match loop (do NOT hand-tune bands).**
+The skill **generates** the matched EQ with a deterministic script; you
+do not eyeball band moves. The preset MUST carry an
+`eq_eight_band_parametric` block (the parametric EQ, plan block 6) for
+this loop. Per iteration `<N>`:
+
+1. **Read the EQ's live state** from `openrig://plugins/eq_eight_band_parametric/params`
+   (Step 2.6) and the placed block's current values: the 8 band **gain**
+   param paths in band order + their current gains, plus band 1's
+   **high-pass cutoff** path + value.
+2. **Render** the bundled DI through the preset → `renders/<role>-v<N>.wav`
+   (step 6.0).
+3. **Compute the correction** — run the analyzer's auto-EQ-match:
+   ```
+   .venv/bin/python scripts/eq_match.py \
+     <…>/refs/<role>.wav <…>/renders/<role>-v<N>.wav \
+     --gains <g1,…,g8 current> --hp-hz <current b1 cutoff> \
+     --output <…>/diffs/<role>-v<N>-eq.json
+   ```
+   It returns `new_gains` (the 8 absolute gains to set), `band_gap_db`,
+   `total_gap_db`, and `new_highpass_hz`. The number is the
+   **level-normalised LTAS** distance over signal-bearing windows —
+   silence trimmed, level removed (so RMS is never matched), sampled at
+   the 8 octave band centres.
+4. **Apply the whole vector** via `set_block_parameter_number`: each of
+   the 8 `new_gains` onto its band-gain path (peak bands b2..b7 and the
+   b8 high-shelf gain), and `new_highpass_hz` onto band 1's high-pass
+   cutoff (if b8 is a low-pass rather than a shelf, apply its suggested
+   cutoff the same way). You apply **all** bands the script returns — you
+   do NOT pick "the worst band" by hand.
+5. **Re-render** (bump `<N>`) and re-run the script.
+
+**Stop when `total_gap_db` plateaus** (two consecutive iterations with no
+meaningful drop) **or** falls below the shape target. Report the gap
+**per iteration** (initial → final). **Honest ceiling:** a generic-DI
+render vs a real recording cannot reach 0 — note content differs — so the
+realistic converged floor for a real-recording reference is roughly
+**≤ ~35 dB total gap** (the spectral curves visibly overlay; the proven
+"Gravity" run went 102 → 33). That overlaid state is the ≥95%-shape goal
+of the VALIDATION GATE. If the gap plateaus **far above** that (e.g. the
+curve shape still differs structurally, not just in level), the EQ alone
+isn't enough — the **gear is wrong**: change the amp/cab capture or gain
+class (Step 2) and restart the loop. **Ignore any level/RMS difference**
+— level is Step 7's job. Do **not** read raw `centroid` or `time_fx` as
+truth (Step 0 caveat, Step 2 `time_fx` rule).
 
 **6.4 — Time-based FX come from research, never `time_fx`.** Delay and
 reverb are temporal — they are NOT in the spectral envelope, so the
@@ -1225,12 +1255,15 @@ read-render-compare over persistent artifacts.
 - [ ] The reference you compared against is the **isolated guitar** (you
       separated it from a full mix if needed, or stopped and asked for a
       stem) — never a full-band mix.
-- [ ] If a reference was provided, you drove the **level-normalised LTAS
-      envelope proximity %** to **≥ 95%** (re-rendering per iteration),
-      and did NOT chase a raw `match_score` that folds in onsets/silence/
-      level. If it plateaued below 95% you changed the approach
-      (amp/cab/boost/EQ) and only reported a shortfall if 95% was
-      genuinely unreachable — you did NOT call a sub-95% preset done. You
+- [ ] If a reference was provided, you ran the **automatic auto-EQ-match
+      loop** (Step 6.3): `scripts/eq_match.py` per iteration → applied the
+      full 8-band `new_gains` vector (+ band-1 high-pass) via
+      `set_block_parameter_number` → re-rendered → re-measured, until
+      `total_gap_db` plateaued / hit the shape target. You did NOT
+      hand-pick "the worst band" by eye, and did NOT chase a raw
+      `match_score`. You reported the gap per iteration (initial → final).
+      If it plateaued far above the target you changed the gear (Step 2)
+      and restarted — you did NOT call a structurally-off preset done. You
       never asserted a sonic verdict of your own; the user's ear
       redirected the build ONLY when the user said it's bad.
 - [ ] You did NOT set the delay/reverb blocks from the fingerprint's
@@ -1478,6 +1511,8 @@ read-render-compare over persistent artifacts.
 | "I built it from research, no need to render" | Research = educated guess. The render is mandatory both modes; the only validated preset is one you rendered and measured. If the user has a reference, run it. |
 | "I'll render+measure AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → measure proximity → adjust → … until proximity ≥ 95% (or the user signs off). Reporting "done" after the FIRST save is reporting on a guess. |
 | "Proximity is stuck at 88%, that's close enough / the best I can get" | 95% is the bar, not "best effort". EQ alone plateauing means the gear is wrong — change the amp/cab capture, gain class, or add a boost, and keep going. Only report a shortfall if 95% is genuinely unreachable; never ship sub-95% as done. |
+| "I'll just nudge the EQ bands by ear / by eye until it looks closer" | That's the band-by-band hand-tuning the user rejected as guessing. The match is **generated automatically**: run `scripts/eq_match.py` (Step 6.3), apply the full 8-band `new_gains` vector it returns, re-render, repeat. You do not pick bands by hand. |
+| "The EQ shape won't close, I'll just keep adding more EQ bands / moves manually" | If the auto-loop's `total_gap_db` plateaus far above target, EQ can't fix it — the **gear** (amp/cab/gain class) is wrong. Change it in Step 2 and restart the loop; don't pile manual EQ moves onto the wrong amp. |
 | "The user sent the whole song, I'll fingerprint/compare against that" | A full mix is dominated by drums/bass/vocals — matching a guitar render to it is hopeless ("nothing like it"). Isolate the guitar first (source separation); if you can't, ask for an isolated stem. Only ever compare guitar-against-guitar. |
 | "I'll chase the analyzer's raw `match_score`" | Against a real recording the raw score folds in note onsets, silence and level, so it can't converge (the "Gravity" 166→131 dB stall). Chase the **level-normalised LTAS envelope proximity %** — it measures timbre and reaches ≥ 95%. |
 | "It sounds muffled to me, so I'll EQ-brighten" / "the delay sounds too long, I'll shorten it" | **You have no ears.** You cannot have a sonic opinion — asserting one is fabrication. Act on the **measurement**; the only ear is the **user's**, and only when *they* say it's bad. Do not invent an ear verdict to drive a move. |
