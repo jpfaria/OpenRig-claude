@@ -118,16 +118,18 @@ in the repo — stop and tell the user, do not improvise.
 
 ### Level is NOT timbre — never match the reference's RMS
 
-In **both** modes, the preset's **output level is always maximized for
-the stage** (the loudness law, Step 7) — it is **never** matched to the
-reference's RMS. A real reference is often quiet (soft playing, gaps,
-mastering headroom); matching its RMS ships a broken-feeling quiet
-preset. Loudness is decided by Step 7's maximize-without-clipping pass
-on the output-trim block alone, **independently of the reference**. Any
+In **both** modes, the preset's **output level is gain-staged for the
+stage with headroom** (the gain-staging law, Step 7) — it is **never**
+matched to the reference's RMS. A real reference is often quiet (soft
+playing, gaps, mastering headroom); matching its RMS ships a
+broken-feeling preset. Level is decided by Step 7's headroom pass on the
+**pre-limiter** gain (EQ `output_db` / output-trim), targeting peak
+≈ -7 dBFS **on the bundled DI** so live dynamics have room before the
+limiter — **independently of the reference**. Any
 `match_score`/`diff.json` recommendation about RMS or level is a
 **level** recommendation and is **ignored** for tone purposes — Step 7
 owns level. (This resolves the only apparent conflict between Step 6 and
-Step 7: Step 6 never touches level, Step 7 always maximizes it.)
+Step 7: Step 6 never touches level, Step 7 sets the headroom.)
 
 ## Step −1 — Ask the user: MCP live or YAML file only?
 
@@ -405,7 +407,7 @@ the scalar fields. Treat them by tier:
 |---|---|---|
 | `band_energy` / normalized **LTAS shape** over signal-bearing windows | **Usable as SHAPE** | Directional EQ guide ("more energy 2–4 kHz") — cross-check against the spectrogram. Never a hard target. |
 | `centroid` | **Fragile** | On a sparse/separated stem it tracks *which notes were held*, not timbre. Do not low-pass off a low centroid; confirm against the spectrogram + LTAS shape. |
-| `RMS` / loudness | **Never a target** | Reflects performance dynamics + mastering, not tone. Level is maximized in Step 7, never matched to the ref. |
+| `RMS` / loudness | **Never a target** | Reflects performance dynamics + mastering, not tone. Level is gain-staged for headroom in Step 7, never matched to the ref. |
 | `time_fx` (delay/reverb) | **Low-confidence** | Artifact-prone (reverb tail → "long delay"; hall → "spring"). Delay/reverb come from research (Step 2, Step 6), not from this field. |
 | `gain_character` / `tone_profile` | Usable | Clean/crunch/high-gain class is robust. |
 
@@ -635,7 +637,7 @@ field against the `blocks-reference.md` *recipes*:
 > signal-bearing windows**, cross-checked against the spectrogram PNG
 > and the normalized LTAS — never as a hard EQ target. `RMS` is
 > **never** an EQ or
-> level target (level is maximized in Step 7, not matched). See Step 0's
+> level target (level is gain-staged for headroom in Step 7, not matched). See Step 0's
 > reliability caveat.
 
 Research only fills in what the fingerprint cannot reveal (the exact
@@ -861,8 +863,8 @@ Steps:
 6.  filter  / <parametric_eq_model_id>    enabled:true   intent: mimic real bass/mid/treble/presence shape (see Step 4)
 7.  delay   / <delay_model_id>            enabled:<bool> intent: time from BPM math (recipe in blocks-reference.md per style)
 8.  reverb  / <reverb_model_id>           enabled:true   intent: room for rhythm, hall for lead; size + mix per analyzer RT60
-9.  dynamics/ <limiter_model_id>          enabled:true   intent: brick-wall safety on the bus
-10. gain    / <volume_model_id>            enabled:true   intent: per-preset output trim — MAXIMIZED in Step 7 (measured peak ≈ -1.0 dBFS), never left at a timid default
+9.  dynamics/ <limiter_model_id>          enabled:true   intent: safety limiter — threshold near the ceiling, idle on normal playing; NOT a brickwall the signal lives against (Step 7)
+10. gain    / <volume_model_id>            enabled:true   intent: per-preset output trim — gain-staged in Step 7 to peak ≈ -7 dBFS on the bundled DI (headroom for live dynamics), never slammed to -1
 ```
 
 The **`intent:`** column is the recipe-class hint (what this block is *for*). The actual `MODEL_ID`s are picked in Step 2 (from `openrig://plugins` + recipes in `blocks-reference.md`); the actual param **paths, types, ranges, and enum options** come from `openrig://plugins/{id}/params` in **Step 2.6** — never from this template. Do NOT read names like "mix", "attack_ms", "threshold", "feedback" from this table and assume they are the schema paths for the chosen plugin; they are the *concepts* you'll set, and the actual path/type for each concept comes from Step 2.6 only.
@@ -1033,12 +1035,30 @@ this loop. Per iteration `<N>`:
    **level-normalised LTAS** distance over signal-bearing windows —
    silence trimmed, level removed (so RMS is never matched), sampled at
    the 8 octave band centres.
-4. **Apply the whole vector** via `set_block_parameter_number`: each of
-   the 8 `new_gains` onto its band-gain path (peak bands b2..b7 and the
-   b8 high-shelf gain), and `new_highpass_hz` onto band 1's high-pass
-   cutoff (if b8 is a low-pass rather than a shelf, apply its suggested
-   cutoff the same way). You apply **all** bands the script returns — you
-   do NOT pick "the worst band" by hand.
+4. **Gain-normalize the vector, THEN apply it — never ship raw boosts
+   into the limiter.** The script's `new_gains` is a *shape*; before
+   applying, **subtract the maximum positive gain in the vector from
+   every band**, so the loudest band sits at ≈ 0 dB and the whole curve
+   is **cut-biased (only cuts + the relative shape)**. This is a constant
+   offset across all 8 bands, so it preserves the **exact** shape the
+   level-normalised match measures — `+15/+6/0` → `0/-9/-15`, same
+   timbre, **zero** localized pre-limiter boost. A raw +15 dB band slams
+   the brickwall limiter and distorts; the normalized curve doesn't.
+   Apply the **normalized** vector via `set_block_parameter_number` (all
+   8 bands — peak b2..b7 + the b8 high-shelf gain) plus `new_highpass_hz`
+   onto band 1's high-pass cutoff (if b8 is a low-pass rather than a
+   shelf, apply its suggested cutoff the same way). You still apply
+   **all** bands the script returns (normalized) — you do NOT pick "the
+   worst band" by hand. Recover the constant level the normalization
+   removed **once, cleanly**, on the EQ `output_db` (or amp output) — set
+   so the post-EQ signal sits with margin below the limiter threshold,
+   **never** by re-boosting individual bands. The headroom is created
+   here, before the limiter; Step 7 then gain-stages to the -7 dBFS DI
+   target. This is the fix for presets that "estouram" — the clipping was
+   localized +14…+17 dB bands hitting the limiter, not the output trim.
+   On the next iteration, feed the normalized gains back as `--gains
+   <current>`; the constant offset is invisible to the level-normalised
+   match, so convergence is unaffected.
 5. **Re-render** (bump `<N>`) and re-run the script.
 
 **Stop when `total_gap_db` plateaus** (two consecutive iterations with no
@@ -1075,66 +1095,82 @@ Without running this loop, you are shipping research + fingerprint
 alone — an **educated guess**, not a validated preset. Say so in the
 chat reply if you could not complete it.
 
-### 7. Output level maximization — as loud as possible without clipping (MANDATORY before done)
+### 7. Output level gain-staging — headroom for live dynamics, NOT ceiling-maximization (MANDATORY before done)
 
-> ⛔ **Loudness law (user correction, 2026-06-12):** every preset
-> leaves the chain **as loud as possible without clipping**. Presets
-> shipped with a timid output trim are the documented failure mode —
-> the user has to crank everything downstream and the preset feels
-> broken next to the rig's other tones.
+> ⛔ **Gain-staging law (user correction, 2026-06-17 — supersedes the
+> 2026-06-12 "as loud as possible without clipping" framing):** the
+> bundled DI is **one fixed, conservative input**. A real guitar played
+> harder is several dB hotter than that file, so you level the preset to
+> peak **≈ -6…-8 dBFS (aim -7) on the bundled DI**, leaving headroom for
+> live dynamics. Slamming the DI render to ≈ -1 dBFS leaves **zero**
+> headroom → live playing pushes past the ceiling → the brickwall
+> limiter clamps **every** transient → audible clipping / pumping. That
+> is the documented "estourando" failure. -7 dBFS on the conservative DI
+> is **not** a timid preset: under real hot playing it lands near the
+> ceiling. The headroom IS the loudness — measured on the right input.
 
 Runs **after** the Step 6 tone loop completes (envelope proximity ≥ 95%,
 or the user signed off) — so level moves never pollute the tone work —
 and **before** the final `save_chain_preset` + "done" report.
-Level is **always** maximized here regardless of mode, and **never**
-matched to the reference's RMS (a real reference is often quiet):
+Level is **always** gain-staged for headroom here regardless of mode,
+and **never** matched to the reference's RMS (a real reference is often
+quiet):
 
 1. **Measure the latest render's peak** — deterministically, never by
    guess. Use the analyzer fingerprint's loudness/peak field if it
    exposes one, or any deterministic peak readout on the WAV (e.g.
    `sox <wav> -n stat`, or a two-line soundfile/numpy max-abs in the
    analyzer venv). Record the value in dBFS.
-2. **Target: peak in [-2.0, -0.5] dBFS, aim ≈ -1.0 dBFS.** Below
-   -3 dBFS is too quiet — raise the trim. At or above -0.3 dBFS is
-   clipping territory (intersample peaks) — back off.
-3. **Move ONLY the final volume/output-trim block (plan block 10).**
-   Compute the delta (`target_dB - measured_dB`), convert to the
-   block's scale, apply via `set_block_parameter_number`. Never touch
-   amp gain/master, boost level, or the limiter to fix loudness —
-   those are tone, and changing them invalidates the converged
-   match_score.
-4. **Re-render and re-measure to confirm.** The trim block sits AFTER
-   the brickwall limiter, so it absolutely can clip the output — the
-   confirmation render is the only proof the new peak landed in the
-   window. Iterate trim → render → measure until it does. These
-   confirmation renders reuse the current `<N>` artifacts' naming with
-   a `-level` suffix (`renders/<role>-v<N>-level.wav`); they are level
-   housekeeping, not tone iterations, and don't bump `<N>`.
+2. **Target: peak in [-8.0, -6.0] dBFS, aim ≈ -7.0 dBFS on the bundled
+   DI.** Above -5 dBFS leaves too little headroom — a hotter live take
+   hits the limiter and clips. Below -10 dBFS is genuinely quiet — raise
+   the pre-limiter gain. The window is the **headroom budget**, not a
+   loudness ceiling to push against.
+3. **Create the headroom BEFORE the limiter — never after it.** The
+   level lives on the **pre-limiter** gain: the EQ `output_db`
+   (Step 6.3, after gain-normalizing the curve) and the output-trim
+   block (plan block 10), with the amp output as the coarse stage. Move
+   those to land the DI peak at ≈ -7 dBFS. **Do NOT** chase level by
+   re-boosting individual EQ bands (Step 6.3 forbids it) — that puts the
+   localized boost back into the limiter.
+4. **Chain master volume ≠ headroom.** The chain/master volume control
+   (`set_chain_volume`) sits **AFTER** the limiter. Lowering it drops the
+   meter but does **NOT** stop the limiter pumping — the signal is
+   already clamped by the time it reaches the master. You cannot create
+   headroom downstream of the thing that's clipping. Headroom is only
+   creatable **upstream of the limiter** (EQ `output_db` / output-trim /
+   amp output). Never reach for the post-limiter master to "fix"
+   clipping; it hides the symptom and ships the pumping preset.
+5. **The limiter is a safety, not a leveler.** Set its threshold **near
+   the ceiling** (≈ -1 dBFS) so that, at the -7 dBFS DI level, it sits
+   **idle on normal playing** and engages only on rare peaks. It must NOT
+   be a brickwall the signal lives against. If the limiter is
+   gain-reducing on ordinary notes, your **pre-limiter gain is too hot** —
+   pull it down (step 3); do NOT lower the threshold to "tame" the
+   sound. The limiter rarely engaging is the success signal.
+6. **Re-render and re-measure to confirm.** Iterate pre-limiter gain →
+   render → measure until the DI peak lands in [-8.0, -6.0] dBFS **and**
+   the limiter is idle on normal playing (no gain reduction on ordinary
+   notes — confirm the render isn't pumping). These confirmation renders
+   reuse the current `<N>` artifacts' naming with a `-level` suffix
+   (`renders/<role>-v<N>-level.wav`); they are level housekeeping, not
+   tone iterations, and don't bump `<N>`.
+7. **Save** (`save_chain_preset`) and report the final measured DI peak
+   in the chat reply alongside the match_score (e.g. "DI peak -7.1 dBFS,
+   limiter idle on normal playing").
 
-   **If the trim hits its schema maximum and the confirmed peak is
-   still below -3 dBFS**, the gap can't be closed at the trim — STOP
-   and report the measured numbers to the user ("trim at max, peak
-   still -X dBFS — upstream gain staging is eating the headroom").
-   Do NOT silently start raising amp master / boost level to
-   compensate: that re-opens the converged tone. Let the user decide
-   between accepting the level or re-entering the Step 6 loop with
-   level as an explicit constraint.
-5. **Save with the maximized trim** (`save_chain_preset`) and report
-   the final measured peak in the chat reply alongside the
-   match_score (e.g. "output peak -1.1 dBFS").
+**There is no "-18 dBFS standard target" in this skill either.** -18 dBFS
+(and similar K-system / broadcast alignment levels) are DAW mixing
+conventions, and -18 on the DI would be genuinely quiet. The law is
+**headroom-on-the-DI**: peak ≈ -7 dBFS, limiter idle. Neither slam the DI
+to -1 (no headroom → clips live) nor drop it to -18 (quiet).
 
-**There is no "-18 dBFS standard target" in this skill.** -18 dBFS
-(and similar K-system / broadcast alignment levels) are mixing
-conventions for headroom inside a DAW session — a live rig preset is
-a finished sound, and the law here is maximize-without-clipping. If
-the converged render already peaks inside the window, leave the trim
-alone and just report the measured value.
-
-**File-only path:** without the runtime there is no render to
-measure, so level maximization is impossible. Set the trim to the
-recipe/default value and flag explicitly in the chat reply: "output
-level unverified — file-only build; on first MCP session run the
-Step 7 level pass, the preset may load quiet until then".
+**File-only path:** without the runtime there is no render to measure, so
+the headroom pass is impossible. Set the EQ `output_db` / trim to a
+conservative, headroom-biased recipe default (do NOT default toward the
+ceiling) and flag explicitly in the chat reply: "output level unverified
+— file-only build; on first MCP session run the Step 7 headroom pass to
+land the DI peak at ≈ -7 dBFS with the limiter idle".
 
 ## Step 8 — Re-evaluation of an existing preset
 
@@ -1270,12 +1306,18 @@ read-render-compare over persistent artifacts.
       `time_fx`, did NOT EQ-darken off a raw `centroid`, and did NOT
       match the reference's RMS. Delay/reverb came from research;
       EQ shape was cross-checked against spectrogram + LTAS; level was
-      maximized in Step 7.
-- [ ] After tone convergence you ran the **Step 7 level pass**: the
-      final render's measured peak lands in [-2.0, -0.5] dBFS, only
-      the output-trim block was moved, a confirmation render proved
-      the value, and the chat reply reports the measured peak. (MCP
-      path; on file-only you flagged "output level unverified".)
+      gain-staged for headroom in Step 7.
+- [ ] The parametric-EQ curve was **gain-normalized** (max band ≈ 0 dB,
+      cut-biased) so no raw band boost hits the limiter, with makeup
+      level recovered once on the EQ `output_db` / amp output — not as
+      per-band boosts (Step 6.3).
+- [ ] After tone convergence you ran the **Step 7 headroom pass**: the
+      final render's measured DI peak lands in [-8.0, -6.0] dBFS, the
+      headroom was created on the **pre-limiter** gain (NOT the
+      post-limiter chain master), the limiter is **idle on normal
+      playing** (rare-peak safety, not a brickwall), a confirmation
+      render proved it, and the chat reply reports the measured DI peak.
+      (MCP path; on file-only you flagged "output level unverified".)
 - [ ] The render command pointed `--input` at the bundled
       `<openrig-source-root>/assets/audio/input.wav` — NOT a
       user-supplied DI path, NOT a random clean WAV.
@@ -1402,21 +1444,29 @@ read-render-compare over persistent artifacts.
   against the spectrogram + LTAS — never as a hard EQ target.
 - **Matching the reference's RMS / level.** A real reference is often
   quiet; matching its RMS ships a quiet preset. Level is ALWAYS
-  maximized in Step 7, never matched. Any `diff.json` RMS/level
-  recommendation is ignored for tone.
-- Declaring "done" with a render that peaks below -3 dBFS, or leaving
-  the output trim at its default because "the tone converged". Tone
-  convergence ≠ level done. **Step 7 is mandatory**: measure the peak,
-  maximize the trim into [-2.0, -0.5] dBFS, confirm with a re-render.
-  Quiet presets are the failure mode the user explicitly corrected
-  ("you're building the tones way too quiet", 2026-06-12).
+  gain-staged for headroom in Step 7, never matched. Any `diff.json`
+  RMS/level recommendation is ignored for tone.
+- **Slamming the DI render to ≈ -1 dBFS** (or any peak above -5 dBFS).
+  The bundled DI is a conservative fixed input — a hotter live take then
+  blows past the ceiling and the limiter clamps every transient
+  ("estourando"). **Step 7 is mandatory**: gain-stage the DI peak into
+  [-8.0, -6.0] dBFS, aim -7, so live dynamics have room. Below -10 dBFS
+  is the opposite failure (genuinely quiet) — raise the pre-limiter gain.
+- **Applying the raw LTAS gap as per-band EQ boosts** (+14…+17 dB on a
+  single band). That localized boost hits the brickwall limiter and
+  distorts. Gain-normalize the curve (Step 6.3): subtract the max band
+  gain so it's cut-biased, recover level once on `output_db`.
+- **Using the chain master volume (`set_chain_volume`) to fix clipping.**
+  The master is **post-limiter** — lowering it hides the meter but the
+  limiter is already pumping upstream. Headroom is only creatable BEFORE
+  the limiter (EQ `output_db` / output-trim / amp output).
+- **Treating the limiter as a leveler / brickwall the signal lives
+  against.** It's a rare-peak safety: threshold near the ceiling, idle on
+  normal playing. If it gain-reduces on ordinary notes, the pre-limiter
+  gain is too hot — pull it down, don't lower the threshold.
 - Targeting -18 dBFS (or any K-system / broadcast alignment level) for
-  the preset's output, or LOWERING the trim of an already-quiet render
-  "to hit the standard". There is no -18 dBFS standard in this skill —
-  the law is maximize-without-clipping (Step 7).
-- Fixing loudness by raising amp gain/master, boost level, or limiter
-  params after tone convergence. Loudness moves live on the final
-  output-trim block ONLY; everything upstream is tone.
+  the preset's output. There is no -18 dBFS standard in this skill —
+  the law is headroom-on-the-DI (peak ≈ -7 dBFS, limiter idle; Step 7).
 - Asking the user for a DI WAV file. **You don't.** The DI is bundled
   at `<openrig-source-root>/assets/audio/input.wav`. Only the *wet
   reference stem* comes from the user.
@@ -1521,12 +1571,13 @@ read-render-compare over persistent artifacts.
 | "The user says it sounds muffled, but the measurement looks fine — I'll trust the number" | When the **user** says it's bad, that complaint **overrides** the number — act on it directly. The measurement is your *default* basis; the user's stated verdict is the override. Ignoring the user is forbidden. |
 | "The fingerprint says delay 865 ms / 39% — I'll set the delay block to that" | `time_fx` is artifact-prone: that 865 ms was a *reverb tail* misread as delay, and the "spring" was a smooth hall. Delay/reverb come from research + the song, never from `time_fx`. It is a weak corroborator only. |
 | "The stem's centroid is ~480 Hz, so the tone is dark — I'll low-pass / EQ-darken" | On a sparse or separated stem the centroid tracks *which notes were held* (sustained low notes + silence), not timbre. Low-passing off it muffled the real "Gravity" build to 750 Hz. Read centroid as directional shape, cross-check the spectrogram + LTAS, never low-pass off the scalar. |
-| "The reference RMS is quiet, so I'll match it / leave the preset quiet" | Level is never matched to the ref — a real reference is often quiet by performance or mastering. Step 7 always maximizes the output trim without clipping, independently of the reference. Matching RMS ships the broken-quiet preset the loudness law exists to prevent. |
+| "The reference RMS is quiet, so I'll match it / leave the preset quiet" | Level is never matched to the ref — a real reference is often quiet by performance or mastering. Step 7 gain-stages the DI peak to ≈ -7 dBFS with headroom, independently of the reference. Matching RMS ships a broken preset. |
 | "I'll treat the bundled-DI-vs-real-stem raw `match_score` as the target" | The bundled DI is a *different performance* from the real stem, so the raw score conflates note/silence with tone and can't converge. The target is the **level-normalised LTAS envelope proximity ≥ 95%** — that isolates timbre and does converge. |
-| "The standard output target is -18 dBFS, I'll trim to that" | Fabricated standard. -18 dBFS is a DAW/broadcast headroom convention, not a rig preset law. This skill's law is **maximize without clipping**: peak in [-2.0, -0.5] dBFS, aim ≈ -1.0 (Step 7). Trimming an already-quiet render DOWN to "-18 standard" is the exact baseline failure this rule exists to block. |
-| "Tone converged, the level is a matter of taste — I'll leave the trim at default" | Level is not taste, it's Step 7: measure the render's peak, raise the trim until the peak lands in the window, confirm with a re-render. A converged-but-quiet preset feels broken next to the rig's other tones. |
-| "I'll leave generous headroom (peak -10 dBFS) to be safe — the user can always turn it up" | The user CAN'T always turn it up — the preset competes with other bank slots at performance time, and "turn everything else up" is not a fix. The brickwall limiter is the safety; the trim's job is loudness. Maximize per Step 7. |
-| "The limiter protects the output, so I can push the trim as high as I want without measuring" | The trim block sits AFTER the limiter — it can clip regardless. The confirmation re-render + peak measurement in Step 7 is the only proof. Measured, never assumed. |
+| "The standard output target is -18 dBFS, I'll trim to that" | Fabricated standard. -18 dBFS is a DAW/broadcast headroom convention, not a rig preset law — and on the DI it's genuinely quiet. This skill's law is **headroom-on-the-DI**: peak in [-8.0, -6.0] dBFS, aim ≈ -7 (Step 7), limiter idle. Not -18 (quiet), not -1 (clips live). |
+| "I'll maximize the DI render to ≈ -1 dBFS so it's nice and loud" | That's the clipping root cause. The bundled DI is a conservative fixed input; a hotter live take then blows past the ceiling and the limiter clamps every transient ("estourando"). Gain-stage the DI peak to ≈ -7 dBFS — under real hot playing that lands near the ceiling. -7 on the DI IS the loud level, measured on the right input. |
+| "Tone converged, the level is a matter of taste — I'll leave the trim at default" | Level is not taste, it's Step 7: measure the DI peak, set the **pre-limiter** gain until it lands in [-8.0, -6.0] dBFS, confirm with a re-render that the limiter is idle. A default-trim preset is unverified, not done. |
+| "The render is clipping, so I'll pull the chain master volume down to fix it" | The chain master is **post-limiter** — it drops the meter but the limiter is already pumping upstream of it. You cannot fix clipping downstream of the thing clipping. Create headroom BEFORE the limiter: gain-normalize the EQ (Step 6.3) and lower the EQ `output_db` / output-trim / amp output until the limiter sits idle. |
+| "The limiter is brick-wall protection, so I can run the signal hot against it" | The limiter is a rare-peak safety, not a leveler the signal lives against. If it gain-reduces on ordinary notes, the pre-limiter gain is too hot — pull it down (Step 7 step 3); never lower the threshold to "tame" a too-hot signal. Limiter idle on normal playing is the success signal. |
 | "The previous version of this preset worked without rendering, so I can skip this time" | Whoever told you that lied. **Every preset built without render+compare in this skill's history has been thrown away by the user.** Clocks v1 is the canonical example. No exceptions. |
 | "There's no `openrig render` available, I'll skip" | If `openrig render` is genuinely missing from PATH, STOP and tell the user — do not silently skip the gate. The CLI ships with OpenRig; check `which openrig` and `openrig --help` for the `render` subcommand. |
 | "The user didn't give me a DI, I can't render" | The user **never** gives you a DI. The canonical DI ships at `<openrig-source-root>/assets/audio/input.wav`. Reading the skill for the path is on you. |
