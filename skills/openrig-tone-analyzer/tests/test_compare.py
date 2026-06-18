@@ -394,6 +394,54 @@ def test_diff_carries_rendered_section_id_reason(
     assert diff["rendered"]["section_id"] == "section_1"
 
 
+# Test G: proximity_pct — level-independent timbre number, distinct from match_score
+def test_diff_emits_level_independent_proximity_pct(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """compare.py must emit proximity_pct (timbre, level-independent), ALONGSIDE
+    match_score. Same band SHAPE at a different overall level → proximity ~100%,
+    even though match_score is dragged down by the level-laden band delta."""
+    import numpy as np
+    from scripts import compare as compare_mod
+
+    shape = [-30.0, -22.0, -18.0, -20.0, -24.0, -28.0, -33.0, -40.0]
+    wet_fp = _make_fingerprint([
+        _make_section(0, rms_db=-10.0, centroid_hz=1200.0,
+                      band_energy_db=[x + 12.0 for x in shape], thd_pct=10.0,
+                      presence="lead", tone_profile="crunch"),
+    ], sha="wetProx")
+    ref_fp = _make_fingerprint([
+        _make_section(0, rms_db=-22.0, centroid_hz=1200.0,
+                      band_energy_db=list(shape), thd_pct=10.0,
+                      presence="lead", tone_profile="crunch"),
+    ], sha="refProx")
+
+    sig = np.zeros(48000, dtype=np.float32)
+
+    def fake_run_analyze_cached(path):
+        if "ref" in str(path):
+            return ref_fp, sig, 48000
+        return wet_fp, sig, 48000
+
+    monkeypatch.setattr(compare_mod, "run_analyze_cached", fake_run_analyze_cached)
+    monkeypatch.setattr(compare_mod, "render_ab_spec_png",
+                        lambda *a, **kw: tmp_path / "ab_spec.png")
+
+    out_dir = tmp_path / "out"
+    rc = compare_mod.main(["/tmp/ref.wav", "/tmp/wet.wav", "--out-dir", str(out_dir)])
+    assert rc == 0
+    diff = json.loads((out_dir / "diff.json").read_text())
+
+    assert "proximity_pct" in diff
+    assert 0.0 <= diff["proximity_pct"] <= 100.0
+    # same shape shifted +12 dB → identical timbre
+    assert diff["proximity_pct"] == pytest.approx(100.0, abs=0.5)
+    # match_score still carries the level-laden band delta → not 100%-equivalent
+    assert diff["match_score"] < 0.95
+    # the two numbers measure different things
+    assert "match_score" in diff
+
+
 # Test F: pick_ref_section new signature receives wet_section explicitly
 def test_pick_ref_section_uses_explicit_wet_section_argument() -> None:
     """pick_ref_section must accept wet_section as a parameter (not grab [0])."""

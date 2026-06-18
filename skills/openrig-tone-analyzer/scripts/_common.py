@@ -134,6 +134,40 @@ def compute_band_energy_db(signal: np.ndarray, sr: int) -> list[float]:
     return results
 
 
+def ltas_proximity_pct(ref_ltas: Any, wet_ltas: Any) -> float:
+    """Level-independent timbre proximity of two per-band LTAS vectors, in [0, 100].
+
+    Proximity = how identically the tone *sounds*, independent of volume/level.
+    It is the cosine similarity of the **mean-subtracted** per-band LTAS vectors,
+    mapped to a percentage:
+
+        proximity_pct = 100 * max(0, dot(r, w) / (||r|| * ||w||))
+
+    where ``r`` / ``w`` are ref / wet with their per-band mean removed. The
+    mean-subtraction removes overall level by construction, so scaling either
+    signal (a pure dB offset across all bands) leaves the number unchanged —
+    volume never moves timbre proximity. 100 = identical envelope shape.
+
+    Inputs may be raw band-energy dB (mean removed here) or already
+    mean-subtracted LTAS (mean-subtraction is then a no-op) — both are valid,
+    so eq_match's normalised LTAS and compare's section band_energy_db both
+    feed in directly.
+
+    A perfectly flat vector has no shape: two flat vectors are identical (100);
+    flat-vs-shaped has no shared direction (0).
+    """
+    r = np.asarray(ref_ltas, dtype=np.float64)
+    w = np.asarray(wet_ltas, dtype=np.float64)
+    r = r - r.mean()
+    w = w - w.mean()
+    nr = float(np.linalg.norm(r))
+    nw = float(np.linalg.norm(w))
+    if nr < 1e-9 or nw < 1e-9:
+        return 100.0 if (nr < 1e-9 and nw < 1e-9) else 0.0
+    cos = float(np.dot(r, w) / (nr * nw))
+    return float(max(0.0, cos) * 100.0)
+
+
 def compute_spectral_centroid_hz(signal: np.ndarray, sr: int) -> float:
     f, mag = _stft_mag(signal, sr)
     # per-frame centroid, then median across frames

@@ -91,18 +91,25 @@ reamp as a bonus tighter signal.
 > stop early or to change course. When the user *does* say it's bad,
 > that specific complaint overrides the number and you act on it.
 
-**Acceptance bar: proximity ≥ 95%.** Express the faithful number as a
-**proximity %** (100% = identical normalised envelope). You may NOT
-declare the preset done until proximity is **≥ 95%** — that is the bar,
-not "best I could get". The render+compare is MANDATORY whenever a
-reference exists (saving without it is a blind guess — the Clocks v1
-failure). If you iterate and proximity **plateaus below 95%**, that is
-**not done**: change the approach (different amp/cab capture, more EQ
-bands, revisit the gain class) and keep going; only if you genuinely
-cannot reach 95% do you STOP and report the exact proximity to the user
-as a shortfall — never ship a sub-95% preset as "done". The user's ear
-can still override at any point, but their *silence* never lowers the
-95% bar.
+**Acceptance bar: `proximity_pct` ≥ 95.** The analyzer **emits** this
+number for you — do NOT hand-convert it from a dB gap. Both `eq_match.py`
+and `compare.py` write a **`proximity_pct`** field (0–100, where 100 =
+identical normalised envelope): the cosine similarity of the
+mean-subtracted per-band LTAS vectors, mapped to a percentage. It is
+**level-independent by construction** (volume / RMS is removed before the
+comparison), so it measures only timbre. **Read that field; gate on
+`proximity_pct ≥ 95`.** You may NOT declare the preset done below 95.
+The render+compare is MANDATORY whenever a reference exists (saving
+without it is a blind guess — the Clocks v1 failure). If you iterate and
+`proximity_pct` **plateaus below 95**, that is **not done**: the gear is
+wrong — change the approach (different amp/cab capture, more EQ bands,
+revisit the gain class) and keep going; only if you genuinely cannot
+reach 95 do you STOP and report the exact `proximity_pct` to the user as
+a shortfall — never ship a sub-95 preset as "done". `total_gap_db` is a
+secondary diagnostic only; **`match_score` is NEVER the bar** (it folds
+in onsets, silence and level — the very things timbre proximity excludes).
+The user's ear can still override at any point, but their *silence* never
+lowers the 95 bar.
 
 If the user explicitly says they have **no reference at all**, declare
 that **out loud in the chat** before Step 8 (`save_chain_preset`) — "no
@@ -1110,11 +1117,13 @@ Per iteration `<N>`:
      --gains <g1,…,g8 current> --hp-hz <current b1 cutoff> \
      --output <…>/diffs/<role>-v<N>-eq.json
    ```
-   It returns `new_gains` (the 8 absolute gains to set), `band_gap_db`,
-   `total_gap_db`, and `new_highpass_hz`. The number is the
-   **level-normalised LTAS** distance over signal-bearing windows —
-   silence trimmed, level removed (so RMS is never matched), sampled at
-   the 8 octave band centres.
+   It returns `new_gains` (the 8 absolute gains to set), **`proximity_pct`**
+   (0–100, the acceptance bar — see below), `band_gap_db`, `total_gap_db`,
+   and `new_highpass_hz`. `proximity_pct` is the **level-independent
+   timbre number**: cosine similarity of the mean-subtracted per-band LTAS
+   (silence trimmed, level removed so RMS is never matched, sampled at the
+   8 octave band centres). `total_gap_db` is a raw dB distance — a
+   secondary diagnostic, NOT the bar.
 4. **Gain-normalize the vector, THEN apply it — never ship raw boosts
    into the limiter.** The script's `new_gains` is a *shape*; before
    applying, **subtract the maximum positive gain in the vector from
@@ -1141,17 +1150,17 @@ Per iteration `<N>`:
    match, so convergence is unaffected.
 5. **Re-render** (bump `<N>`) and re-run the script.
 
-**Stop when `total_gap_db` plateaus** (two consecutive iterations with no
-meaningful drop) **or** falls below the shape target. Report the gap
-**per iteration** (initial → final). **Honest ceiling:** a generic-DI
-render vs a real recording cannot reach 0 — note content differs — so the
-realistic converged floor for a real-recording reference is roughly
-**≤ ~35 dB total gap** (the spectral curves visibly overlay; the proven
-"Gravity" run went 102 → 33). That overlaid state is the ≥95%-shape goal
-of the VALIDATION GATE. If the gap plateaus **far above** that (e.g. the
-curve shape still differs structurally, not just in level), the EQ alone
-isn't enough — the **gear is wrong**: change the amp/cab capture or gain
-class (Step 2) and restart the loop.
+**Drive `proximity_pct` to ≥ 95; that is the stop bar.** Read it from the
+emitted `diffs/<role>-v<N>-eq.json` each iteration and **report
+`proximity_pct` per iteration** (initial → final). Stop when it reaches
+**≥ 95**. If it **plateaus below 95** (two consecutive iterations with no
+meaningful gain), the EQ alone isn't enough — the **gear is wrong**:
+change the amp/cab capture or gain class (Step 2) and restart the loop.
+`total_gap_db` may be logged as a secondary diagnostic (the proven
+"Gravity" run drove it 102 → 33 as proximity climbed), but you do **not**
+gate on it and you do **not** hand-convert a dB gap into a percentage —
+the script emits `proximity_pct` directly. There is no "≤ ~35 dB ≈ 95%"
+equivalence to eyeball; read the field.
 
 > ⚠️ **First rule out an artifacted ref (Step 0 ref-sanity check)
 > BEFORE swapping gear.** If the plateau is driven by the ref's top-band
@@ -1388,14 +1397,15 @@ read-render-compare over persistent artifacts.
 - [ ] If a reference was provided, you ran the **automatic auto-EQ-match
       loop** (Step 6.3): `scripts/eq_match.py` per iteration → applied the
       full 8-band `new_gains` vector (+ band-1 high-pass) via
-      `set_block_parameter_number` → re-rendered → re-measured, until
-      `total_gap_db` plateaued / hit the shape target. You did NOT
-      hand-pick "the worst band" by eye, and did NOT chase a raw
-      `match_score`. You reported the gap per iteration (initial → final).
-      If it plateaued far above the target you changed the gear (Step 2)
-      and restarted — you did NOT call a structurally-off preset done. You
-      never asserted a sonic verdict of your own; the user's ear
-      redirected the build ONLY when the user said it's bad.
+      `set_block_parameter_number` → re-rendered → re-measured, until the
+      emitted **`proximity_pct` ≥ 95**. You did NOT hand-pick "the worst
+      band" by eye, did NOT hand-convert a dB gap into a %, and did NOT
+      gate on `total_gap_db` or chase a raw `match_score`. You reported
+      `proximity_pct` per iteration (initial → final). If it plateaued
+      below 95 you changed the gear (Step 2) and restarted — you did NOT
+      call a sub-95 preset done. You never asserted a sonic verdict of
+      your own; the user's ear redirected the build ONLY when the user
+      said it's bad.
 - [ ] You did NOT set the delay/reverb blocks from the fingerprint's
       `time_fx`, did NOT EQ-darken off a raw `centroid`, and did NOT
       match the reference's RMS. Delay/reverb came from research;
@@ -1669,7 +1679,8 @@ read-render-compare over persistent artifacts.
 | "I'll render+measure AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → measure proximity → adjust → … until proximity ≥ 95% (or the user signs off). Reporting "done" after the FIRST save is reporting on a guess. |
 | "Proximity is stuck at 88%, that's close enough / the best I can get" | 95% is the bar, not "best effort". EQ alone plateauing means the gear is wrong — change the amp/cab capture, gain class, or add a boost, and keep going. Only report a shortfall if 95% is genuinely unreachable; never ship sub-95% as done. |
 | "I'll just nudge the EQ bands by ear / by eye until it looks closer" | That's the band-by-band hand-tuning the user rejected as guessing. The match is **generated automatically**: run `scripts/eq_match.py` (Step 6.3), apply the full 8-band `new_gains` vector it returns, re-render, repeat. You do not pick bands by hand. |
-| "The EQ shape won't close, I'll just keep adding more EQ bands / moves manually" | If the auto-loop's `total_gap_db` plateaus far above target, EQ can't fix it — the **gear** (amp/cab/gain class) is wrong. Change it in Step 2 and restart the loop; don't pile manual EQ moves onto the wrong amp. |
+| "The EQ shape won't close, I'll just keep adding more EQ bands / moves manually" | If the auto-loop's `proximity_pct` plateaus below 95, EQ can't fix it — the **gear** (amp/cab/gain class) is wrong. Change it in Step 2 and restart the loop; don't pile manual EQ moves onto the wrong amp. |
+| "I'll convert `total_gap_db` to a proximity % myself / gate on the dB gap" | Don't hand-convert. The analyzer **emits `proximity_pct`** (level-independent, 0–100) in both the eq_match JSON and `diff.json`. Read that field and gate on ≥ 95. `total_gap_db` is a raw dB diagnostic, `match_score` folds in level/onsets/silence — neither is the bar. |
 | "The user sent the whole song, I'll fingerprint/compare against that" | A full mix is dominated by drums/bass/vocals — matching a guitar render to it is hopeless ("nothing like it"). Isolate the guitar first (source separation); if you can't, ask for an isolated stem. Only ever compare guitar-against-guitar. |
 | "I'll chase the analyzer's raw `match_score`" | Against a real recording the raw score folds in note onsets, silence and level, so it can't converge (the "Gravity" 166→131 dB stall). Chase the **level-normalised LTAS envelope proximity %** — it measures timbre and reaches ≥ 95%. |
 | "It sounds muffled to me, so I'll EQ-brighten" / "the delay sounds too long, I'll shorten it" | **You have no ears.** You cannot have a sonic opinion — asserting one is fabrication. Act on the **measurement**; the only ear is the **user's**, and only when *they* say it's bad. Do not invent an ear verdict to drive a move. |

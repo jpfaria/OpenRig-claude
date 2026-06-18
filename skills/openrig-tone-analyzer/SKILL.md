@@ -86,14 +86,19 @@ hash so it knows when to reinstall.
 
    **`eq_match.py`** is a PURE measurement+arithmetic step (no rig, no
    network, no render): it emits `new_gains` (8 absolute EQ gains, dB),
-   `band_gap_db`, `total_gap_db`, and `new_highpass_hz`. The number is the
-   **level-normalised LTAS** over signal-bearing windows (silence trimmed
-   < -45 dB, level removed, sampled at the 8 `eq_eight_band_parametric`
-   octave centres) — so loudness is never matched. The orchestrator
-   (`openrig-tone-builder`) feeds the EQ's current gains in, applies
-   `new_gains` out via `set_block_parameter_number`, re-renders, and loops
-   until `total_gap_db` plateaus. Honest ceiling: a generic-DI render vs a
-   real recording cannot reach 0 (note content differs) — the target is
+   **`proximity_pct`** (the acceptance bar), `band_gap_db`, `total_gap_db`,
+   and `new_highpass_hz`. All are computed from the **level-normalised
+   LTAS** over signal-bearing windows (silence trimmed < -45 dB, level
+   removed, sampled at the 8 `eq_eight_band_parametric` octave centres) —
+   so loudness is never matched. **`proximity_pct`** (0–100) is the
+   level-independent timbre number: cosine similarity of the
+   mean-subtracted per-band LTAS vectors, 100 = identical envelope shape.
+   It is the number the orchestrator gates on (≥ 95); `total_gap_db` is a
+   raw dB diagnostic only. The orchestrator (`openrig-tone-builder`) feeds
+   the EQ's current gains in, applies `new_gains` out via
+   `set_block_parameter_number`, re-renders, and loops until
+   `proximity_pct ≥ 95`. Honest ceiling: a generic-DI render vs a real
+   recording cannot reach 100 (note content differs) — the target is
    spectral shape, not bit-exactness.
 
    **Pick `--out-dir` from MCP, not from `/tmp`.** OpenRig #582 exposes
@@ -115,9 +120,12 @@ hash so it knows when to reinstall.
    - **analyze**: one short paragraph per section — gain character,
      dynamics, presence, and any notable time-FX (delay/reverb estimates).
      Mention the `spec_global.png` for the full overview.
-   - **compare**: lead with `match_score` (and the caveat from iron rule 5),
-     then the matched section ID + reason, then the top 2-3 recommendations
-     as one sentence each.
+   - **compare**: lead with **`proximity_pct`** (the level-independent
+     timbre number, 0–100 — the tone-builder's acceptance bar), then
+     `match_score` (and the caveat from iron rule 5 — it folds in
+     level/onsets/silence, so it is NOT the timbre bar), then the matched
+     section ID + reason, then the top 2-3 recommendations as one sentence
+     each.
 5. **Hand off to the orchestrator** if the user asked for a tone-builder
    loop — that's `openrig-tone-builder`'s job. This skill stops at the
    diff.
@@ -155,7 +163,9 @@ Short form:
   in a single document. Filename is fixed (`analysis.pdf`) so callers
   can find it deterministically; lives in the same `--out-dir` as the
   JSON.
-- `diff.json` v2: `reference.matched_section_id`, `rendered`, `match_score`,
+- `diff.json` v2: `reference.matched_section_id`, `rendered`,
+  `proximity_pct` (level-independent timbre %, 0–100 — the tone-builder
+  acceptance bar), `match_score`,
   `delta.*`, `recommendations[]` (priority-sorted, each with `target`,
   `action`, `rationale`), `converged`.
 

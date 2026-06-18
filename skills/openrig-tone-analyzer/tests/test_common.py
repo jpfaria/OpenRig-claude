@@ -21,6 +21,31 @@ from scripts import _common
 SR = 22050
 
 
+# --- ltas_proximity_pct (level-independent timbre proximity) ----------------
+
+def test_proximity_pct_identical_shape_is_100():
+    v = np.array([4.0, 3.0, 1.0, -1.0, -2.0, 0.0, 2.0, -5.0])
+    assert _common.ltas_proximity_pct(v, v) == pytest.approx(100.0, abs=1e-6)
+
+
+def test_proximity_pct_is_level_independent():
+    """A constant dB offset on either vector (a level / RMS change) must NOT
+    move the proximity — timbre proximity is volume-independent by definition."""
+    ref = np.array([4.0, 3.0, 1.0, -1.0, -2.0, 0.0, 2.0, -5.0])
+    wet = np.array([2.0, 2.0, 0.0, -1.0, -1.0, 1.0, 1.0, -4.0])
+    base = _common.ltas_proximity_pct(ref, wet)
+    shifted = _common.ltas_proximity_pct(ref - 12.0, wet + 12.0)
+    assert shifted == pytest.approx(base, abs=1e-6)
+
+
+def test_proximity_pct_clamped_to_zero_for_opposite_shape():
+    ref = np.array([10.0, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0, -10.0])
+    wet = -ref  # cosine -1 → clamped to 0
+    p = _common.ltas_proximity_pct(ref, wet)
+    assert 0.0 <= p <= 100.0
+    assert p == pytest.approx(0.0, abs=1e-6)
+
+
 def _sine(freq_hz: float, duration_s: float, amplitude: float = 0.5, sr: int = SR) -> np.ndarray:
     n = int(round(duration_s * sr))
     t = np.arange(n, dtype=np.float64) / sr

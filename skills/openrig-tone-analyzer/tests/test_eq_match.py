@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 _HERE = Path(__file__).resolve().parent
@@ -175,3 +176,49 @@ def test_cli_emits_correction_json(tmp_path):
     assert len(data["new_gains"]) == 8
     assert len(data["band_gap_db"]) == 8
     assert data["total_gap_db"] >= 0.0
+
+
+# --- proximity_pct (level-independent timbre proximity, the acceptance bar) -
+
+def test_cli_emits_proximity_pct(tmp_path):
+    ref_sig = _tone_bank(SR, 1.5)
+    t = np.arange(len(ref_sig)) / SR
+    dark = ref_sig - 0.5 * np.sin(2 * np.pi * 7040 * t) / 7
+    ref_p = tmp_path / "ref.wav"
+    wet_p = tmp_path / "wet.wav"
+    sf.write(ref_p, ref_sig, SR)
+    sf.write(wet_p, dark, SR)
+    out = tmp_path / "eqfix.json"
+    script = _HERE.parent / "scripts" / "eq_match.py"
+    res = subprocess.run(
+        [sys.executable, str(script), str(ref_p), str(wet_p),
+         "--gains", "0,0,0,0,0,0,0,0", "--output", str(out)],
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    data = json.loads(out.read_text())
+    assert "proximity_pct" in data
+    assert 0.0 <= data["proximity_pct"] <= 100.0
+
+
+def test_proximity_pct_unchanged_when_render_scaled_12db(tmp_path):
+    """The user's core invariant: the SAME render at +12 dB and -12 dB must
+    yield the SAME proximity_pct against the same reference. Volume must not
+    move the timbre number."""
+    ref_sig = _tone_bank(SR, 1.5)
+    t = np.arange(len(ref_sig)) / SR
+    wet_sig = ref_sig - 0.5 * np.sin(2 * np.pi * 7040 * t) / 7
+    g = 10.0 ** (12.0 / 20.0)  # +12 dB
+    ref_p = tmp_path / "ref.wav"
+    sf.write(ref_p, ref_sig, SR)
+
+    def prox(wet: np.ndarray, name: str) -> float:
+        wp = tmp_path / name
+        sf.write(wp, wet, SR)
+        return eq_match.build_correction(ref_p, wp, [0.0] * 8)["proximity_pct"]
+
+    base = prox(wet_sig, "w0.wav")
+    louder = prox(wet_sig * g, "wl.wav")
+    quieter = prox(wet_sig / g, "wq.wav")
+    assert louder == pytest.approx(base, abs=0.5)
+    assert quieter == pytest.approx(base, abs=0.5)

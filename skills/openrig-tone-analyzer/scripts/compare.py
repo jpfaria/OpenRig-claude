@@ -405,6 +405,15 @@ def assemble_diff(
         and max_band_delta <= CONVERGENCE_THRESHOLD["max_abs_band_delta_db"]
     )
 
+    # Level-independent timbre proximity over the matched signal-bearing
+    # windows (the section band_energy_db IS that section's LTAS). This is the
+    # acceptance number the tone-builder gates on — distinct from match_score,
+    # which folds in onsets / silence / level and must NOT be the bar.
+    proximity_pct = _common.ltas_proximity_pct(
+        matched_section["spectrum"]["band_energy_db"],
+        wet_section["spectrum"]["band_energy_db"],
+    )
+
     diff = {
         "schema_version": SCHEMA_VERSION,
         "reference": {
@@ -417,6 +426,7 @@ def assemble_diff(
             "section_id": wet_section["id"],
             "section_id_reason": wet_reason,
         },
+        "proximity_pct": float(proximity_pct),
         "match_score": float(match_score),
         "delta": delta,
         "recommendations": recommendations,

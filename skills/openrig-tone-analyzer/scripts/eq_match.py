@@ -166,6 +166,11 @@ def build_correction(
         "wet_ltas_db": _common.round_for_json(wet_ltas.tolist()),
         "band_gap_db": _common.round_for_json(band_gap),
         "total_gap_db": _common.round_for_json(gap_total_db(ref_ltas, wet_ltas)),
+        # Level-independent timbre proximity (the acceptance bar). total_gap_db
+        # is a raw dB distance; this is the 0-100 % the tone-builder gates on.
+        "proximity_pct": _common.round_for_json(
+            _common.ltas_proximity_pct(ref_ltas, wet_ltas), ndigits=2
+        ),
         "new_gains": _common.round_for_json(
             next_band_gains(current_gains, ref_ltas, wet_ltas)
         ),
