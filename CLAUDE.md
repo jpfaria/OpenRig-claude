@@ -39,8 +39,8 @@ When the user asks to **edit a skill** (or any committed file) in this repo, the
    - **minor** (`0.x.0`) — a new skill, or a new capability/behavior added to an existing skill.
    - **major** (`x.0.0`) — a breaking change to a skill's contract (renamed/removed skill, changed trigger or interface that can break existing user workflows).
 3. Edit `version` to the new value **in the same commit** as the skill/file change (or, if you already committed, amend or add a follow-up commit before pushing — but never push the change without the bump).
-4. `git tag vX.Y.Z` and `git push origin main --follow-tags`.
-5. The work is **not "done"** until the bumped `version` and the `vX.Y.Z` tag are on the remote. Verify before claiming done.
+4. Push the change, then the tag — **explicitly**: `git push origin main` && `git tag -a vX.Y.Z -m vX.Y.Z` && `git push origin vX.Y.Z`. Do NOT rely on `--follow-tags`: a lightweight `git tag vX.Y.Z` is silently skipped by it, so the tag never reaches the remote. Use an annotated tag (`-a`) and push the tag ref by name.
+5. The work is **not "done"** until BOTH the bumped `version` AND the `vX.Y.Z` tag are on the remote — verify with `git ls-remote --tags origin | grep vX.Y.Z` before claiming done. (`--follow-tags` failing silently is the documented trap here.)
 
 **Commit style:** `fix(<skill-short-name>): …` / `feat(<skill>): …` (match `git log`).
 
