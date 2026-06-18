@@ -421,6 +421,49 @@ separated reference corrupts.
 (You never substitute your own ear for these — you have none; the
 user's ear is the only human override.)
 
+### ⛔ Ref-sanity check — is the top end real, or a separation artifact?
+
+A source-separated stem often **loses its top octave**: the separator
+strips the brilho, leaving a steep artificial high-cut no real amp+cab
+produces. The tell is **not** the ref's top band vs its neighbour (a
+genuinely dark amp also slopes down) — it's the top band vs **where a
+real amp render actually sits**, measured against the **high-shelf's
+reach**:
+
+**Trigger — the top band is unbridgeable.** A real amp render's ~10 kHz
+band sits roughly -6 dB; the EQ high-shelf maxes around **-24 dB** of
+cut. So if the ref's ~10 kHz band is **more than ~24 dB below the
+render's** ~10 kHz band — i.e. the eq_match **`band_gap_db` for the 10k
+band exceeds the shelf's max cut**, and the plateau is dominated by that
+one band — no EQ setting and **no amp swap** can close it. Example (a
+real silverchair stem): ref `5120:-22  10240:-33` while the render's 10k
+sits near -6 → a **~27 dB** top-band gap against a -24 dB shelf limit, so
+~3 dB at 10k is irreducible and dominates the stalled ~51 gap. This is
+the usual fingerprint of a separation-stripped top octave. (You can also
+flag it up front from the ref LTAS alone: a ~10 kHz band far below where
+any amp renders it — e.g. below ~-26 dB while the mids sit near -10.)
+
+When this trips:
+- **Do NOT chase ≥95% (≤~35 gap).** It is physically unreachable against
+  an artifacted ref — chasing it burns iterations and amp swaps on a
+  missing top end that no gear can recreate. **This overrides the Step
+  6.3 "gear is wrong, swap the amp" reflex**: here the *ref* is wrong,
+  not the gear.
+- **Set the honest bar:** drive the bands the EQ *can* correct until the
+  lower/mid curve overlays, and accept the floor (≈ the overlaid-curve
+  gap, ~35, with the artifacted top band as known-bad).
+- **Tell the user up front**, e.g.: *"this stem looks high-cut /
+  separation-artifacted — its 10k sits ~27 dB below where a real amp
+  renders it, more than the EQ shelf can cut. The ≥95% bar is unreachable
+  against it; I'll overlay the lower bands (~35 gap) and stop there rather
+  than chase the missing top end. A cleaner isolated stem would lift the
+  bar."* *(render in the user's
+  language at runtime)*
+
+If the top-band gap is within the shelf's reach (the ref's ~10 kHz band
+is not more than ~24 dB below where the render produces it), the ref is
+fine — proceed with the normal ≥95% target.
+
 ### ⛔ HARD RULE — no suppositions about what the reference contains
 
 > Every claim about what is IN the user's reference WAV must cite a
@@ -823,6 +866,23 @@ Steps:
    automatically. The result is `BlockAdded { chain, block }` — capture
    the new block id.
 
+   > ⛔ **`position` counts EVERY block, including DISABLED ones.** A
+   > block added but left disabled (e.g. a pitch block the song doesn't
+   > use) still occupies its slot and shifts every downstream index by
+   > one. If you compute a block's position as if the disabled one
+   > weren't there, it lands one slot early. In a live silverchair build
+   > this dropped the parametric EQ to position 5 — **before the amp** —
+   > where it silently could not shape the distorted tone (the eq_match
+   > gap stalled 52.9 → 51.3; moving it post-amp dropped it to 42.7
+   > immediately).
+   > **The parametric EQ MUST sit AFTER the amp/cab (post-distortion).**
+   > After adding it — and again at the end of the build — **read the
+   > saved order back** (`openrig://chains/{chain}/blocks`, or the
+   > preset YAML) and **assert the EQ block id is downstream of the amp
+   > block id**. Never trust the position index blind; the chain's actual
+   > ordered block list is the only ground truth. If it landed wrong,
+   > `move_block` it after the amp and re-read to confirm.
+
 5. **Set parameters** using the schema you read in **Step 2.6**. For each
    parameter you want to set, the schema entry tells you which tool to
    call based on `domain`:
@@ -860,7 +920,7 @@ Steps:
 3.  dynamics/ <gate_model_id>              enabled:true   intent: fast attack, release tuned to playing dynamics, threshold above noise floor
 4.  gain    / <gain_model_id>              enabled:<bool> intent: only if the song uses a boost/drive (recipe in blocks-reference.md per style)
 5.  amp     / <amp_model_id>              enabled:true   intent: NAM amp for songs with a real amp model; recipe in blocks-reference.md
-6.  filter  / <parametric_eq_model_id>    enabled:true   intent: mimic real bass/mid/treble/presence shape (see Step 4)
+6.  filter  / <parametric_eq_model_id>    enabled:true   intent: mimic real bass/mid/treble/presence shape — MUST land AFTER the amp/cab (post-distortion); verify the saved order, position counts disabled blocks (see Step 4 add_block warning + Step 6.3)
 7.  delay   / <delay_model_id>            enabled:<bool> intent: time from BPM math (recipe in blocks-reference.md per style)
 8.  reverb  / <reverb_model_id>           enabled:true   intent: room for rhythm, hall for lead; size + mix per analyzer RT60
 9.  dynamics/ <limiter_model_id>          enabled:true   intent: safety limiter — threshold near the ceiling, idle on normal playing; NOT a brickwall the signal lives against (Step 7)
@@ -1015,7 +1075,27 @@ to re-render a historic iteration. On accept, also `cp` to
 The skill **generates** the matched EQ with a deterministic script; you
 do not eyeball band moves. The preset MUST carry an
 `eq_eight_band_parametric` block (the parametric EQ, plan block 6) for
-this loop. Per iteration `<N>`:
+this loop.
+
+> ⛔ **Setup BEFORE the first iteration — two preconditions, both
+> mandatory:**
+>
+> 1. **Set the EQ band frequencies to the match grid.** `scripts/eq_match.py`
+>    works on a fixed 8-band octave grid:
+>    **`[80, 160, 320, 640, 1280, 2560, 5120, 10240]` Hz** — band 1 is a
+>    **high-pass** (cutoff = 80 Hz), bands 2–7 are **peak** (centers
+>    160…5120 Hz), band 8 is a **high-shelf** (10240 Hz). The script's
+>    `new_gains[i]` maps to band `i` **at that center** — so if the EQ
+>    block's bands are left at their default freqs, the gains land on the
+>    wrong bands and the match never converges. First set each band's
+>    **frequency** param (path from the Step 2.6 schema) to its grid
+>    center above; only then start iterating.
+> 2. **Confirm the EQ is downstream of the amp** in the saved order (the
+>    Step 4 `add_block` warning) — EQ before the distortion cannot shape
+>    the final tone, and `position` counts disabled blocks, so this is
+>    not guaranteed by the plan index. Read it back and assert it.
+
+Per iteration `<N>`:
 
 1. **Read the EQ's live state** from `openrig://plugins/eq_eight_band_parametric/params`
    (Step 2.6) and the placed block's current values: the 8 band **gain**
@@ -1071,7 +1151,21 @@ realistic converged floor for a real-recording reference is roughly
 of the VALIDATION GATE. If the gap plateaus **far above** that (e.g. the
 curve shape still differs structurally, not just in level), the EQ alone
 isn't enough — the **gear is wrong**: change the amp/cab capture or gain
-class (Step 2) and restart the loop. **Ignore any level/RMS difference**
+class (Step 2) and restart the loop.
+
+> ⚠️ **First rule out an artifacted ref (Step 0 ref-sanity check)
+> BEFORE swapping gear.** If the plateau is driven by the ref's top-band
+> `band_gap_db` exceeding the high-shelf's ~24 dB max cut (a high-cut /
+> separation artifact — the top octave the EQ can't reach), the bar is
+> **unreachable by any amp** — capping it honestly at the
+> overlaid floor and telling the user is the correct move, NOT amp
+> roulette. Only swap gear when the curve shape differs in bands the ref
+> actually contains. When you DO swap the amp via `replace_block_model`,
+> **verify the block stays enabled afterwards** — the replace sometimes
+> silently disables it; re-enable with `toggle_block_enabled` and read
+> back the order (it must remain upstream of the parametric EQ).
+
+**Ignore any level/RMS difference**
 — level is Step 7's job. Do **not** read raw `centroid` or `time_fx` as
 truth (Step 0 caveat, Step 2 `time_fx` rule).
 
@@ -1353,6 +1447,19 @@ read-render-compare over persistent artifacts.
 
 ## Red flags -- STOP
 
+- Trusting `add_block`'s `position` index without reading the saved order
+  back. Position counts **disabled** blocks too, so the parametric EQ can
+  land before the amp and silently stop shaping the tone. Assert the EQ id
+  is downstream of the amp id; `move_block` if not (Step 4 / Step 6.3).
+- Starting the eq_match loop with the EQ bands at their default
+  frequencies. The script maps gains to the fixed grid
+  `[80,160,320,640,1280,2560,5120,10240]` Hz — set the band freqs to those
+  centers first, or the gains land on the wrong bands (Step 6.3).
+- Chasing ≥95% (or amp-swapping) against a stem whose top-band gap
+  exceeds the EQ high-shelf's ~24 dB max cut (ref 10k far below where any
+  amp renders it). That's a separation artifact — the bar is unreachable;
+  cap at the overlaid floor (~35) and tell the user (Step 0 ref-sanity
+  check). The *ref* is wrong, not the gear.
 - Running `find crates/` or `grep MODEL_ID` or `Read` on any `.rs` file.
 - Saying "I'll persist this rule in memory" / "I'll save this so I
   don't repeat it" / "I'll remember this for next time" / proposing
