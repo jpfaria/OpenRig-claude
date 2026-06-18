@@ -93,9 +93,18 @@ def normalized_ltas(
     return band_db - band_db.mean()
 
 
-def gap_total_db(ref_ltas: np.ndarray, wet_ltas: np.ndarray) -> float:
-    """Total spectral-shape distance: L1 sum of the per-band dB deltas."""
-    return float(np.abs(np.asarray(ref_ltas) - np.asarray(wet_ltas)).sum())
+def gap_total_db(
+    ref_ltas: np.ndarray, wet_ltas: np.ndarray, band_mask: np.ndarray | None = None
+) -> float:
+    """Total spectral-shape distance: L1 sum of the per-band dB deltas.
+
+    ``band_mask`` restricts the sum to the trustworthy bands, so a separated
+    stem's dead top octave does not pad the gap.
+    """
+    diff = np.abs(np.asarray(ref_ltas) - np.asarray(wet_ltas))
+    if band_mask is not None:
+        diff = diff[np.asarray(band_mask, dtype=bool)]
+    return float(diff.sum())
 
 
 def next_band_gains(
@@ -103,14 +112,22 @@ def next_band_gains(
     ref_ltas: np.ndarray,
     wet_ltas: np.ndarray,
     clamp: tuple[float, float] = GAIN_CLAMP,
+    band_mask: np.ndarray | None = None,
 ) -> list[float]:
     """new_gain[i] = clamp(current_gain[i] + (ref_ltas[i] - wet_ltas[i])).
 
     Each band is nudged by exactly the dB it is short (or over) relative to
     the reference shape — the proven additive rule. Convergent because the
     EQ raises that band's measured LTAS by the gain it adds.
+
+    ``band_mask`` HOLDS the excluded bands (delta forced to 0): when the ref's
+    top octave is a separation artifact, the top bands must never be cut toward
+    the dead reference — that cut is the low-pass that kills the amp's natural
+    brilho. The held bands keep the amp's own voicing.
     """
     delta = np.asarray(ref_ltas, dtype=np.float64) - np.asarray(wet_ltas, dtype=np.float64)
+    if band_mask is not None:
+        delta = np.where(np.asarray(band_mask, dtype=bool), delta, 0.0)
     new = np.asarray(current_gains, dtype=np.float64) + delta
     return [float(v) for v in np.clip(new, clamp[0], clamp[1])]
 
@@ -159,20 +176,30 @@ def build_correction(
     ref_ltas = normalized_ltas(ref_sig, ref_sr)
     wet_ltas = normalized_ltas(wet_sig, wet_sr)
     band_gap = (ref_ltas - wet_ltas).tolist()
+    # The reference decides which bands are trustworthy: an AI-separated stem's
+    # dead top octave is excluded from the gap, the proximity, AND the gains —
+    # so the loop never low-passes the render to chase a missing top end.
+    mask = _common.trustworthy_band_mask(ref_ltas)
     out: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "band_centers_hz": BAND_CENTERS_HZ,
         "ref_ltas_db": _common.round_for_json(ref_ltas.tolist()),
         "wet_ltas_db": _common.round_for_json(wet_ltas.tolist()),
         "band_gap_db": _common.round_for_json(band_gap),
-        "total_gap_db": _common.round_for_json(gap_total_db(ref_ltas, wet_ltas)),
-        # Level-independent timbre proximity (the acceptance bar). total_gap_db
-        # is a raw dB distance; this is the 0-100 % the tone-builder gates on.
+        "total_gap_db": _common.round_for_json(gap_total_db(ref_ltas, wet_ltas, band_mask=mask)),
+        # Level-independent timbre proximity (the acceptance bar), band-limited
+        # to the trustworthy range. total_gap_db is a raw dB distance; this is
+        # the 0-100 % the tone-builder gates on.
         "proximity_pct": _common.round_for_json(
-            _common.ltas_proximity_pct(ref_ltas, wet_ltas), ndigits=2
+            _common.ltas_proximity_pct(ref_ltas, wet_ltas, band_mask=mask), ndigits=2
         ),
+        # True when the reference's top octave is a separation artifact: the
+        # bands >= ~5 kHz were excluded, and the top is left to the amp's
+        # natural voicing rather than matched.
+        "ref_top_octave_dead": bool(not mask.all()),
+        "trustworthy_bands_hz": [int(hz) for hz, keep in zip(BAND_CENTERS_HZ, mask) if keep],
         "new_gains": _common.round_for_json(
-            next_band_gains(current_gains, ref_ltas, wet_ltas)
+            next_band_gains(current_gains, ref_ltas, wet_ltas, band_mask=mask)
         ),
     }
     if current_hp_hz is not None:

@@ -94,11 +94,18 @@ hash so it knows when to reinstall.
    level-independent timbre number: cosine similarity of the
    mean-subtracted per-band LTAS vectors, 100 = identical envelope shape.
    It is the number the orchestrator gates on (≥ 95); `total_gap_db` is a
-   raw dB diagnostic only. The orchestrator (`openrig-tone-builder`) feeds
-   the EQ's current gains in, applies `new_gains` out via
-   `set_block_parameter_number`, re-renders, and loops until
-   `proximity_pct ≥ 95`. Honest ceiling: a generic-DI render vs a real
-   recording cannot reach 100 (note content differs) — the target is
+   raw dB diagnostic only. **Dead-top guard:** when the reference's top
+   octave is an AI source-separation artifact (highest band ≥ 25 dB below
+   the low/mid body — no real amp+cab is that dark), the bands ≥ ~5 kHz are
+   **excluded** from `proximity_pct`, the gap, AND the returned `new_gains`
+   (so the loop never low-passes the render to chase a dead top), and
+   **`ref_top_octave_dead: true`** + `trustworthy_bands_hz` are emitted.
+   This stops the "99 % but sounds muffled" result a full-band cosine
+   produces when the artifact band dominates the vector. The orchestrator
+   (`openrig-tone-builder`) feeds the EQ's current gains in, applies
+   `new_gains` out via `set_block_parameter_number`, re-renders, and loops
+   until `proximity_pct ≥ 95`. Honest ceiling: a generic-DI render vs a
+   real recording cannot reach 100 (note content differs) — the target is
    spectral shape, not bit-exactness.
 
    **Pick `--out-dir` from MCP, not from `/tmp`.** OpenRig #582 exposes
@@ -165,7 +172,9 @@ Short form:
   JSON.
 - `diff.json` v2: `reference.matched_section_id`, `rendered`,
   `proximity_pct` (level-independent timbre %, 0–100 — the tone-builder
-  acceptance bar), `match_score`,
+  acceptance bar; band-limited to the trustworthy range when
+  `ref_top_octave_dead`), `ref_top_octave_dead` (bool — separated-stem dead
+  top octave detected, bands ≥ ~5 kHz excluded), `match_score`,
   `delta.*`, `recommendations[]` (priority-sorted, each with `target`,
   `action`, `rationale`), `converged`.
 

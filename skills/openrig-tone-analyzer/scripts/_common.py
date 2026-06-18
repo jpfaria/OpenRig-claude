@@ -134,7 +134,40 @@ def compute_band_energy_db(signal: np.ndarray, sr: int) -> list[float]:
     return results
 
 
-def ltas_proximity_pct(ref_ltas: Any, wet_ltas: Any) -> float:
+# A top octave sitting this many dB below the low/mid body is not something a
+# real amp+cab produces — it is the dead top AI source-separation leaves behind
+# (the separator strips the brilho). Bands >= ~5 kHz are then untrustworthy.
+DEAD_TOP_OCTAVE_DROP_DB = 25.0
+
+
+def trustworthy_band_mask(band_db: Any, drop_db: float = DEAD_TOP_OCTAVE_DROP_DB) -> np.ndarray:
+    """Boolean mask of the per-band LTAS bands that carry trustworthy timbre.
+
+    AI source-separation kills the top octave of a stem: the highest band sits
+    far below the spectral trend (e.g. a 10240 Hz band ~30 dB under the low/mid
+    body), which no real amp+cab does. Matching that dead top — or worse,
+    low-passing the render to chase it — kills presence/brilho while a naive
+    full-band cosine still reads ~99 % because the artifact band dominates the
+    vector. This is the "99 % but sounds muffled" failure.
+
+    Detection is on the SHAPE (relative to the body peak), so it is independent
+    of overall level: if the highest band is ``drop_db`` or more below the peak
+    of the low/mid body (80..2560 Hz on the 8-band grid), the top octave is
+    treated as a separation artifact and the bands >= ~5 kHz are excluded.
+    Returns an all-True mask for normal spectra (gentle, musical high rolloff).
+    """
+    v = np.asarray(band_db, dtype=np.float64)
+    n = len(v)
+    mask = np.ones(n, dtype=bool)
+    if n < 4:
+        return mask
+    body_peak = float(v[: n - 2].max())  # 80..2560 Hz on the 8-band grid
+    if body_peak - float(v[-1]) >= drop_db:
+        mask[n - 2:] = False  # distrust >= ~5 kHz: the dead top octave
+    return mask
+
+
+def ltas_proximity_pct(ref_ltas: Any, wet_ltas: Any, band_mask: Any = None) -> float:
     """Level-independent timbre proximity of two per-band LTAS vectors, in [0, 100].
 
     Proximity = how identically the tone *sounds*, independent of volume/level.
@@ -148,6 +181,12 @@ def ltas_proximity_pct(ref_ltas: Any, wet_ltas: Any) -> float:
     signal (a pure dB offset across all bands) leaves the number unchanged —
     volume never moves timbre proximity. 100 = identical envelope shape.
 
+    ``band_mask`` (optional boolean array) restricts the comparison to the
+    trustworthy bands — pass ``trustworthy_band_mask(ref)`` so a separated
+    stem's dead top octave cannot inflate (or deflate) the number. The mean is
+    re-centred over the kept bands, so the proximity reflects the reliable
+    range only.
+
     Inputs may be raw band-energy dB (mean removed here) or already
     mean-subtracted LTAS (mean-subtraction is then a no-op) — both are valid,
     so eq_match's normalised LTAS and compare's section band_energy_db both
@@ -158,6 +197,10 @@ def ltas_proximity_pct(ref_ltas: Any, wet_ltas: Any) -> float:
     """
     r = np.asarray(ref_ltas, dtype=np.float64)
     w = np.asarray(wet_ltas, dtype=np.float64)
+    if band_mask is not None:
+        m = np.asarray(band_mask, dtype=bool)
+        r = r[m]
+        w = w[m]
     r = r - r.mean()
     w = w - w.mean()
     nr = float(np.linalg.norm(r))

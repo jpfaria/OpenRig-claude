@@ -442,6 +442,48 @@ def test_diff_emits_level_independent_proximity_pct(
     assert "match_score" in diff
 
 
+# Test H: proximity_pct band-limits the dead top octave of a separated stem
+def test_diff_proximity_band_limited_for_dead_top_stem(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A separated ref with a dead top octave + a bright wet that matches the
+    trustworthy range must score HIGH proximity (dead top excluded) and flag
+    ref_top_octave_dead. Prevents the '99% but sounds muffled' result."""
+    import numpy as np
+    from scripts import compare as compare_mod
+
+    ref_bands = [-20.0, -16.0, -14.0, -15.0, -18.0, -22.0, -30.0, -48.0]  # dead top
+    wet_bands = [-20.0, -16.0, -14.0, -15.0, -18.0, -22.0, -24.0, -28.0]  # live top
+    wet_fp = _make_fingerprint([
+        _make_section(0, rms_db=-12.0, centroid_hz=1200.0,
+                      band_energy_db=wet_bands, thd_pct=10.0,
+                      presence="lead", tone_profile="crunch"),
+    ], sha="wetDead")
+    ref_fp = _make_fingerprint([
+        _make_section(0, rms_db=-12.0, centroid_hz=1200.0,
+                      band_energy_db=ref_bands, thd_pct=10.0,
+                      presence="lead", tone_profile="crunch"),
+    ], sha="refDead")
+
+    sig = np.zeros(48000, dtype=np.float32)
+
+    def fake_run_analyze_cached(path):
+        if "ref" in str(path):
+            return ref_fp, sig, 48000
+        return wet_fp, sig, 48000
+
+    monkeypatch.setattr(compare_mod, "run_analyze_cached", fake_run_analyze_cached)
+    monkeypatch.setattr(compare_mod, "render_ab_spec_png",
+                        lambda *a, **kw: tmp_path / "ab_spec.png")
+
+    out_dir = tmp_path / "out"
+    rc = compare_mod.main(["/tmp/ref.wav", "/tmp/wet.wav", "--out-dir", str(out_dir)])
+    assert rc == 0
+    diff = json.loads((out_dir / "diff.json").read_text())
+    assert diff["ref_top_octave_dead"] is True
+    assert diff["proximity_pct"] >= 99.0   # trustworthy range matches → high
+
+
 # Test F: pick_ref_section new signature receives wet_section explicitly
 def test_pick_ref_section_uses_explicit_wet_section_argument() -> None:
     """pick_ref_section must accept wet_section as a parameter (not grab [0])."""

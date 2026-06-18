@@ -46,6 +46,37 @@ def test_proximity_pct_clamped_to_zero_for_opposite_shape():
     assert p == pytest.approx(0.0, abs=1e-6)
 
 
+# --- trustworthy_band_mask + band-limited proximity (AI-separated dead top) --
+
+def test_trustworthy_band_mask_all_true_for_normal_spectrum():
+    """A normal amp tone rolls off gently up top — no band is excluded."""
+    band_db = np.array([2.0, 5.0, 6.0, 3.0, 0.0, -4.0, -9.0, -14.0])
+    mask = _common.trustworthy_band_mask(band_db)
+    assert mask.tolist() == [True] * 8
+
+
+def test_trustworthy_band_mask_excludes_top_octave_when_collapsed():
+    """AI source-separation kills the top octave (10240 band ~30 dB below the
+    body). The bands >= ~5 kHz are then untrustworthy and must be excluded."""
+    band_db = np.array([2.0, 5.0, 6.0, 3.0, 0.0, -4.0, -10.0, -30.0])
+    mask = _common.trustworthy_band_mask(band_db)
+    assert mask[:6].all()           # 80..2560 Hz trustworthy
+    assert not mask[6] and not mask[7]   # >= 5 kHz excluded
+
+
+def test_proximity_pct_band_mask_reflects_trustworthy_range():
+    """The dead top must NOT drag the number: a bright wet that matches the
+    trustworthy range scores high, even though its live top differs from the
+    ref's dead top. This is the '99% but sounds muffled' bug."""
+    ref = np.array([2.0, 5.0, 6.0, 3.0, 0.0, -4.0, -10.0, -30.0])
+    wet = np.array([2.0, 5.0, 6.0, 3.0, 0.0, -4.0, -6.0, -12.0])  # live top
+    mask = _common.trustworthy_band_mask(ref)
+    full = _common.ltas_proximity_pct(ref, wet)
+    limited = _common.ltas_proximity_pct(ref, wet, band_mask=mask)
+    assert limited > full
+    assert limited == pytest.approx(100.0, abs=0.5)
+
+
 def _sine(freq_hz: float, duration_s: float, amplitude: float = 0.5, sr: int = SR) -> np.ndarray:
     n = int(round(duration_s * sr))
     t = np.arange(n, dtype=np.float64) / sr

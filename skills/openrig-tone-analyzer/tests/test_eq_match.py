@@ -222,3 +222,37 @@ def test_proximity_pct_unchanged_when_render_scaled_12db(tmp_path):
     quieter = prox(wet_sig / g, "wq.wav")
     assert louder == pytest.approx(base, abs=0.5)
     assert quieter == pytest.approx(base, abs=0.5)
+
+
+# --- dead-top guard: never low-pass to chase a separation artifact ---------
+
+def test_next_band_gains_holds_dead_top_bands():
+    """When the ref's top octave is excluded (AI-separation dead top), the
+    correction must HOLD the top bands — never cut them toward the dead ref.
+    Cutting them is the low-pass that kills the amp's natural brilho."""
+    current = [0.0] * 8
+    ref = np.array([2.0, 5.0, 6.0, 3.0, 0.0, -4.0, -10.0, -30.0])
+    wet = np.array([2.0, 5.0, 4.0, 3.0, 0.0, -4.0, 0.0, 0.0])  # live, bright top
+    mask = _common.trustworthy_band_mask(ref)
+    new = eq_match.next_band_gains(current, ref, wet, band_mask=mask)
+    assert new[6] == 0.0 and new[7] == 0.0          # dead top HELD, no low-pass
+    assert new[2] == pytest.approx(2.0)             # trustworthy band still corrected
+
+
+def test_build_correction_band_limits_dead_top_stem(tmp_path):
+    """End-to-end: a ref with a dead top octave and a wet with a live, bright
+    top must score HIGH proximity (dead top excluded), flag the dead top, and
+    NOT cut the top bands toward the artifact."""
+    ref_sig = _tone_bank(SR, 1.5)
+    t = np.arange(len(ref_sig)) / SR
+    # cancel the ref's own 10560 Hz partial exactly (its amplitude is
+    # level/len(freqs) = 0.2/8) → dead 10240 Hz octave, the separation artifact
+    dead_top = ref_sig - (0.2 / 8) * np.sin(2 * np.pi * 10560 * t)
+    ref_p = tmp_path / "ref.wav"
+    wet_p = tmp_path / "wet.wav"
+    sf.write(ref_p, dead_top, SR)
+    sf.write(wet_p, ref_sig, SR)   # wet keeps the live top
+    d = eq_match.build_correction(ref_p, wet_p, [0.0] * 8)
+    assert d["ref_top_octave_dead"] is True
+    assert d["new_gains"][7] == 0.0          # top held, not cut to chase artifact
+    assert d["proximity_pct"] >= 95.0        # trustworthy range matches → high

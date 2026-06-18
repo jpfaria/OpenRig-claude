@@ -408,11 +408,17 @@ def assemble_diff(
     # Level-independent timbre proximity over the matched signal-bearing
     # windows (the section band_energy_db IS that section's LTAS). This is the
     # acceptance number the tone-builder gates on — distinct from match_score,
-    # which folds in onsets / silence / level and must NOT be the bar.
+    # which folds in onsets / silence / level and must NOT be the bar. The mask
+    # excludes an AI-separated stem's dead top octave so it can't inflate the
+    # number (the "99 % but sounds muffled" failure).
+    ref_band_ltas = matched_section["spectrum"]["band_energy_db"]
+    band_mask = _common.trustworthy_band_mask(ref_band_ltas)
     proximity_pct = _common.ltas_proximity_pct(
-        matched_section["spectrum"]["band_energy_db"],
+        ref_band_ltas,
         wet_section["spectrum"]["band_energy_db"],
+        band_mask=band_mask,
     )
+    ref_top_octave_dead = bool(not band_mask.all())
 
     diff = {
         "schema_version": SCHEMA_VERSION,
@@ -427,6 +433,7 @@ def assemble_diff(
             "section_id_reason": wet_reason,
         },
         "proximity_pct": float(proximity_pct),
+        "ref_top_octave_dead": ref_top_octave_dead,
         "match_score": float(match_score),
         "delta": delta,
         "recommendations": recommendations,

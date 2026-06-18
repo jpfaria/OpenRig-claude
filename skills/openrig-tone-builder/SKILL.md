@@ -437,39 +437,39 @@ genuinely dark amp also slopes down) — it's the top band vs **where a
 real amp render actually sits**, measured against the **high-shelf's
 reach**:
 
-**Trigger — the top band is unbridgeable.** A real amp render's ~10 kHz
-band sits roughly -6 dB; the EQ high-shelf maxes around **-24 dB** of
-cut. So if the ref's ~10 kHz band is **more than ~24 dB below the
-render's** ~10 kHz band — i.e. the eq_match **`band_gap_db` for the 10k
-band exceeds the shelf's max cut**, and the plateau is dominated by that
-one band — no EQ setting and **no amp swap** can close it. Example (a
-real silverchair stem): ref `5120:-22  10240:-33` while the render's 10k
-sits near -6 → a **~27 dB** top-band gap against a -24 dB shelf limit, so
-~3 dB at 10k is irreducible and dominates the stalled ~51 gap. This is
-the usual fingerprint of a separation-stripped top octave. (You can also
-flag it up front from the ref LTAS alone: a ~10 kHz band far below where
-any amp renders it — e.g. below ~-26 dB while the mids sit near -10.)
+**The analyzer detects and excludes it for you — automatically.** When the
+reference's top octave is dead (its highest band sits **≥ 25 dB below the
+low/mid body** — a drop no real amp+cab makes), `eq_match.py` and
+`compare.py` **exclude the bands ≥ ~5 kHz** from `proximity_pct`, the gap,
+**and** the band gains, and set **`ref_top_octave_dead: true`**. So:
+- `proximity_pct` already reflects only the **trustworthy ~80–2560 Hz
+  range** — it will NOT read a false 99% off a muffled preset (the bug
+  this fixes: a full-band cosine let the dead artifact band dominate the
+  vector and score 99% while the tone sounded abafado). You still gate on
+  **`proximity_pct ≥ 95`** as usual.
+- the auto-EQ loop **HOLDS** the top bands — it will not cut them toward
+  the dead ref.
 
-When this trips:
-- **Do NOT chase ≥95% (≤~35 gap).** It is physically unreachable against
-  an artifacted ref — chasing it burns iterations and amp swaps on a
-  missing top end that no gear can recreate. **This overrides the Step
-  6.3 "gear is wrong, swap the amp" reflex**: here the *ref* is wrong,
-  not the gear.
-- **Set the honest bar:** drive the bands the EQ *can* correct until the
-  lower/mid curve overlays, and accept the floor (≈ the overlaid-curve
-  gap, ~35, with the artifacted top band as known-bad).
-- **Tell the user up front**, e.g.: *"this stem looks high-cut /
-  separation-artifacted — its 10k sits ~27 dB below where a real amp
-  renders it, more than the EQ shelf can cut. The ≥95% bar is unreachable
-  against it; I'll overlay the lower bands (~35 gap) and stop there rather
-  than chase the missing top end. A cleaner isolated stem would lift the
-  bar."* *(render in the user's
-  language at runtime)*
+When `ref_top_octave_dead` is true:
+- **NEVER low-pass or hand-cut the top to "match" the dead ref.** Cutting
+  the top bands (or turning the EQ's b8 band into a low-pass) to chase a
+  missing top octave is exactly what produced the "99% but sounds
+  muffled" preset. The loop already holds those bands — do **not** override
+  it by hand-cutting, and do **not** swap to a darker amp to chase the
+  dead top.
+- **Let the amp's natural voicing carry the presence.** The top end comes
+  from the chosen amp/cab capture's own brilho, not from EQ-matching a stem
+  that no longer has one. Pick the amp on the trustworthy range + research;
+  leave its top alone.
+- **Tell the user once**, e.g.: *"this stem is source-separated and lost
+  its top octave (no real amp is that dark up top), so I'm matching the
+  trustworthy ~80–2560 Hz range and letting the amp's natural brilho carry
+  the presence — I will NOT low-pass the tone to match the dead top. A
+  cleaner isolated stem would let me match the full range."* *(render in
+  the user's language at runtime)*
 
-If the top-band gap is within the shelf's reach (the ref's ~10 kHz band
-is not more than ~24 dB below where the render produces it), the ref is
-fine — proceed with the normal ≥95% target.
+When `ref_top_octave_dead` is false, the ref's top is real — match the
+full range normally.
 
 ### ⛔ HARD RULE — no suppositions about what the reference contains
 
@@ -1119,11 +1119,16 @@ Per iteration `<N>`:
    ```
    It returns `new_gains` (the 8 absolute gains to set), **`proximity_pct`**
    (0–100, the acceptance bar — see below), `band_gap_db`, `total_gap_db`,
-   and `new_highpass_hz`. `proximity_pct` is the **level-independent
+   `new_highpass_hz`, **`ref_top_octave_dead`** (bool), and
+   `trustworthy_bands_hz`. `proximity_pct` is the **level-independent
    timbre number**: cosine similarity of the mean-subtracted per-band LTAS
    (silence trimmed, level removed so RMS is never matched, sampled at the
-   8 octave band centres). `total_gap_db` is a raw dB distance — a
-   secondary diagnostic, NOT the bar.
+   8 octave band centres), **band-limited to the trustworthy range when the
+   ref's top octave is a separation artifact** (`ref_top_octave_dead:
+   true` → bands ≥ ~5 kHz excluded; the loop also holds those gains, so it
+   never low-passes the render to chase a dead top — see Step 0 ref-sanity
+   check). `total_gap_db` is a raw dB distance — a secondary diagnostic,
+   NOT the bar.
 4. **Gain-normalize the vector, THEN apply it — never ship raw boosts
    into the limiter.** The script's `new_gains` is a *shape*; before
    applying, **subtract the maximum positive gain in the vector from
@@ -1162,17 +1167,18 @@ gate on it and you do **not** hand-convert a dB gap into a percentage —
 the script emits `proximity_pct` directly. There is no "≤ ~35 dB ≈ 95%"
 equivalence to eyeball; read the field.
 
-> ⚠️ **First rule out an artifacted ref (Step 0 ref-sanity check)
-> BEFORE swapping gear.** If the plateau is driven by the ref's top-band
-> `band_gap_db` exceeding the high-shelf's ~24 dB max cut (a high-cut /
-> separation artifact — the top octave the EQ can't reach), the bar is
-> **unreachable by any amp** — capping it honestly at the
-> overlaid floor and telling the user is the correct move, NOT amp
-> roulette. Only swap gear when the curve shape differs in bands the ref
-> actually contains. When you DO swap the amp via `replace_block_model`,
-> **verify the block stays enabled afterwards** — the replace sometimes
-> silently disables it; re-enable with `toggle_block_enabled` and read
-> back the order (it must remain upstream of the parametric EQ).
+> ⚠️ **If `ref_top_octave_dead` is true, do NOT swap gear to chase the
+> top.** The analyzer has already excluded the dead top octave (Step 0
+> ref-sanity check): `proximity_pct` reflects the trustworthy ~80–2560 Hz
+> range and the loop holds the top bands. A plateau here is NOT "the amp
+> is too bright" — the *ref* has no top, no amp does. **Never low-pass /
+> hand-cut the top or swap to a darker amp to match it** — let the amp's
+> natural brilho carry the presence. Only swap gear when the curve shape
+> differs in bands the ref actually contains. When you DO swap the amp via
+> `replace_block_model`, **verify the block stays enabled afterwards** —
+> the replace sometimes silently disables it; re-enable with
+> `toggle_block_enabled` and read back the order (it must remain upstream
+> of the parametric EQ).
 
 **Ignore any level/RMS difference**
 — level is Step 7's job. Do **not** read raw `centroid` or `time_fx` as
@@ -1681,6 +1687,7 @@ read-render-compare over persistent artifacts.
 | "I'll just nudge the EQ bands by ear / by eye until it looks closer" | That's the band-by-band hand-tuning the user rejected as guessing. The match is **generated automatically**: run `scripts/eq_match.py` (Step 6.3), apply the full 8-band `new_gains` vector it returns, re-render, repeat. You do not pick bands by hand. |
 | "The EQ shape won't close, I'll just keep adding more EQ bands / moves manually" | If the auto-loop's `proximity_pct` plateaus below 95, EQ can't fix it — the **gear** (amp/cab/gain class) is wrong. Change it in Step 2 and restart the loop; don't pile manual EQ moves onto the wrong amp. |
 | "I'll convert `total_gap_db` to a proximity % myself / gate on the dB gap" | Don't hand-convert. The analyzer **emits `proximity_pct`** (level-independent, 0–100) in both the eq_match JSON and `diff.json`. Read that field and gate on ≥ 95. `total_gap_db` is a raw dB diagnostic, `match_score` folds in level/onsets/silence — neither is the bar. |
+| "The ref is dark up top, so I'll low-pass / cut the top bands (or pick a darker amp) to match it" | If `ref_top_octave_dead` is true, the ref is a **separated stem that lost its top octave** — no real amp is that dark. Low-passing to match it is the "99% but sounds muffled" bug. The analyzer already excludes ≥ ~5 kHz from `proximity_pct` and HOLDS those gains; let the amp's natural brilho carry the presence. Never cut the top or swap to a darker amp to chase a dead top. |
 | "The user sent the whole song, I'll fingerprint/compare against that" | A full mix is dominated by drums/bass/vocals — matching a guitar render to it is hopeless ("nothing like it"). Isolate the guitar first (source separation); if you can't, ask for an isolated stem. Only ever compare guitar-against-guitar. |
 | "I'll chase the analyzer's raw `match_score`" | Against a real recording the raw score folds in note onsets, silence and level, so it can't converge (the "Gravity" 166→131 dB stall). Chase the **level-normalised LTAS envelope proximity %** — it measures timbre and reaches ≥ 95%. |
 | "It sounds muffled to me, so I'll EQ-brighten" / "the delay sounds too long, I'll shorten it" | **You have no ears.** You cannot have a sonic opinion — asserting one is fabrication. Act on the **measurement**; the only ear is the **user's**, and only when *they* say it's bad. Do not invent an ear verdict to drive a move. |
