@@ -71,13 +71,30 @@ hash so it knows when to reinstall.
 1. **Decide the mode** from how many WAV files the user gave you:
    - 1 file → **analyze**.
    - 2 files → **compare** (first = reference, second = wet/rendered).
+   - 2 files + current EQ gains → **eq-match** (auto-EQ-match: compute the
+     next 8-band gains that move the wet render's spectral SHAPE toward the
+     reference; used by the `openrig-tone-builder` Step 6.3 loop).
 2. **Run it:**
    ```bash
    .venv/bin/python scripts/analyze.py <input.wav> [--out-dir DIR]
    # or
    .venv/bin/python scripts/compare.py <ref.wav> <wet.wav> [--out-dir DIR] [--ref-section IDX] [--wet-section IDX]
+   # or (auto-EQ-match)
+   .venv/bin/python scripts/eq_match.py <ref.wav> <wet.wav> --gains <g1,…,g8> [--hp-hz HZ] [--output FILE]
    ```
-   The script prints the resolved out-dir on its last line.
+   `analyze.py`/`compare.py` print the resolved out-dir on the last line.
+
+   **`eq_match.py`** is a PURE measurement+arithmetic step (no rig, no
+   network, no render): it emits `new_gains` (8 absolute EQ gains, dB),
+   `band_gap_db`, `total_gap_db`, and `new_highpass_hz`. The number is the
+   **level-normalised LTAS** over signal-bearing windows (silence trimmed
+   < -45 dB, level removed, sampled at the 8 `eq_eight_band_parametric`
+   octave centres) — so loudness is never matched. The orchestrator
+   (`openrig-tone-builder`) feeds the EQ's current gains in, applies
+   `new_gains` out via `set_block_parameter_number`, re-renders, and loops
+   until `total_gap_db` plateaus. Honest ceiling: a generic-DI render vs a
+   real recording cannot reach 0 (note content differs) — the target is
+   spectral shape, not bit-exactness.
 
    **Pick `--out-dir` from MCP, not from `/tmp`.** OpenRig #582 exposes
    the user's evaluations directory via the `openrig://paths` resource
