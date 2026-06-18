@@ -30,7 +30,17 @@ When the user asks to **edit a skill** (or any committed file) in this repo, the
 
 **Always edit the SOURCE repo, never the installed cache.** The OpenRig plugin source is `https://github.com/jpfaria/OpenRig-claude`; skills live at `skills/<name>/SKILL.md`. Edits under `~/.claude/plugins/cache/...` (or the marketplace clone at `~/.claude/plugins/marketplaces/openrig/`) are transient — they vanish on the next plugin update. A cache edit is at most a same-session stopgap; the PR/push to source is the deliverable.
 
-**Do NOT bump `.claude-plugin/plugin.json` manually.** CI auto-commits `chore: bump plugin.json to X.Y.Z [skip ci]` after every non-bump push to `main`. A manual bump races CI and gets dropped on the next `git pull --rebase` (`warning: skipped previously applied commit`). Push only the skill change; let CI bump. (Exception: an explicit user request for a specific version like `bump to 0.2.0` — then `git pull --rebase` first, edit, push, and accept that CI may add a patch bump on top.)
+**ALWAYS bump `.claude-plugin/plugin.json` yourself, with semver, in the same commit as the change — and push the tag.** There is no CI auto-bump (the `auto-bump.yml` workflow was removed on purpose). The version travels WITH the change, decided semantically by you — never blind, never deferred. The client gates `/plugin update` on both the `version` field and the matching `vX.Y.Z` git tag, so a change that ships without a bump + tag never reaches any install. The bump is part of the unit of work, exactly like `commit` + `push`.
+
+**How to apply, every ship:**
+1. Read the current `version` from `.claude-plugin/plugin.json`.
+2. Choose the bump by **semver**, by the nature of the change:
+   - **patch** (`0.1.x`) — bug fix, wording, doc, governance/infra, refactor that doesn't change a skill's user-facing behavior.
+   - **minor** (`0.x.0`) — a new skill, or a new capability/behavior added to an existing skill.
+   - **major** (`x.0.0`) — a breaking change to a skill's contract (renamed/removed skill, changed trigger or interface that can break existing user workflows).
+3. Edit `version` to the new value **in the same commit** as the skill/file change (or, if you already committed, amend or add a follow-up commit before pushing — but never push the change without the bump).
+4. `git tag vX.Y.Z` and `git push origin main --follow-tags`.
+5. The work is **not "done"** until the bumped `version` and the `vX.Y.Z` tag are on the remote. Verify before claiming done.
 
 **Commit style:** `fix(<skill-short-name>): …` / `feat(<skill>): …` (match `git log`).
 
