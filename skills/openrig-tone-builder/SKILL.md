@@ -5,6 +5,42 @@ description: "Use when the user asks for a tone, timbre, or preset for a specifi
 
 # OpenRig Tone Builder
 
+## ⛔ THE PROCESS — deterministic, in THIS exact order. No shortcuts.
+
+The user's standing law for this skill: **fingerprint → research the
+artist's REAL gear → build the chain with that SAME gear → regulate by the
+number.** That is the whole job. You do ONLY this:
+
+1. **Fingerprint the stems** the user sent (Step 0). Confirm they are the
+   **isolated instrument being built** (the guitar — or acoustic). A
+   separated stem can still be the WRONG instrument: a piano-driven song
+   (e.g. Clocks) separated badly yields a piano-dominated stem, and matching
+   a guitar to it is hopeless. If unsure, ask which instrument the stem is.
+2. **Research the artist's actual rig for THIS song** (Step 1) — amp(s),
+   pedals, cab(s); for acoustic, which guitar. **`tonedb.co` is source #1 —
+   hit it FIRST**, then the rest of the ladder. Cite sources. Never assert
+   gear from memory (the gear HARD RULE).
+3. **Build the chain with the SAME researched gear**, mapped to OpenRig
+   models (Steps 2–3). You build the real rig — you do **NOT** patch or
+   EQ-tweak a pre-existing preset to chase the number.
+4. **Regulate by the number** (Step 6): render → measure proximity vs the
+   **per-song self-floor** → adjust → repeat.
+
+**Forbidden shortcuts — each has burned a real build:**
+- Skipping `tonedb.co`, jumping to a generic web search or to memory.
+- Measuring/patching an existing preset's EQ instead of researching +
+  building the real gear from scratch.
+- **Asking the user to diagnose by ear** ("what sounds wrong / too dark?").
+  You have no ears AND you do not outsource the diagnosis. You drive the
+  number; the user's ear enters only when THEY volunteer "it's bad", and
+  even then you act on the specific complaint — you never fish for it.
+- Treating a low **self-floor** as a tone failure: a sparse/separated stem
+  has a low self-floor, the proximity caps there, and "at the floor" is the
+  honest ceiling — **report that plainly** to the user (e.g. "the stem's own
+  ceiling is 89%; the preset is at it — a longer/cleaner guitar stem is what
+  would move the number"). Do not silently ship a dead-feeling preset, and
+  do not chase a number that physically cannot move.
+
 Build a faithful tone for a real-world song/artist as a **named preset on
 a new slot in an existing chain's bank**. Default path drives the OpenRig
 MCP server (audible immediately on the live rig); an alternate path
