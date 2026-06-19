@@ -46,6 +46,143 @@ def test_proximity_pct_clamped_to_zero_for_opposite_shape():
     assert p == pytest.approx(0.0, abs=1e-6)
 
 
+# --- energy-weighted, full-band 1/3-octave spectral proximity (the real bar) -
+# The 8-band/80 Hz mean-subtracted cosine is blind in the sub-bass (a +20 dB
+# 63 Hz boom — the audible "som morto" — is invisible) and hypersensitive in
+# the inaudible rolled top (drives a destructive low-pass). The replacement is
+# 1/3-octave from ~40 Hz, weighted by the reference's audibility.
+
+def test_third_octave_centers_span_subbass_to_16k():
+    c = _common.THIRD_OCTAVE_CENTERS_HZ
+    assert c[0] <= 40.0          # reaches the sub-bass the boom lives in
+    assert c[-1] >= 16000.0
+    # 1/3-octave spacing ⇒ ~3 bands per octave
+    assert any(abs(x - 63.0) < 1.0 for x in c)
+
+
+def test_audibility_weight_zero_below_floor():
+    # ref: strong low/mid body, rolled (near-silent) top
+    ref = np.array([-30.0, -22.0, -20.0, -24.0, -40.0, -66.0, -100.0])
+    w = _common.audibility_weights(ref)
+    assert w[1] > 0.5            # -22 dB band is audible
+    assert w[-1] == pytest.approx(0.0)   # -100 dB rolled top → ignored
+    assert w[-2] == pytest.approx(0.0)
+
+
+def test_weighted_proximity_identical_is_100():
+    ref = np.array([-30.0, -22.0, -20.0, -24.0, -28.0, -40.0, -60.0])
+    assert _common.weighted_spectral_proximity_pct(ref, ref) == pytest.approx(100.0, abs=1e-6)
+
+
+def test_weighted_proximity_level_invariant():
+    ref = np.array([-30.0, -22.0, -20.0, -24.0, -28.0, -40.0, -60.0])
+    wet = np.array([-28.0, -21.0, -20.5, -23.0, -27.0, -41.0, -58.0])
+    base = _common.weighted_spectral_proximity_pct(ref, wet)
+    louder = _common.weighted_spectral_proximity_pct(ref, wet + 12.0)
+    quieter = _common.weighted_spectral_proximity_pct(ref, wet - 12.0)
+    assert louder == pytest.approx(base, abs=0.5)
+    assert quieter == pytest.approx(base, abs=0.5)
+
+
+def test_weighted_proximity_drops_hard_on_bass_boom():
+    """The motivating Clocks case: a render with +20 dB of sub-bass boom that
+    the reference does not have must score LOW. The old metric gave ~99%."""
+    #            63Hz  125   250   500   1k    2k    4k
+    ref = np.array([-26.0, -20.0, -18.0, -22.0, -26.0, -32.0, -44.0])
+    wet = ref.copy()
+    wet[0] += 20.0   # +20 dB boom at 63 Hz, an audible band in the ref
+    p = _common.weighted_spectral_proximity_pct(ref, wet)
+    assert p < 85.0, f"bass boom must tank the score, got {p}"
+
+
+def test_weighted_proximity_ignores_rolled_top():
+    """A real guitar's top rolls off; a bright render there must NOT be
+    penalised (and must not drive a low-pass) because the ref band is inaudible."""
+    #            63Hz  125   250   500   1k    4k     8k
+    ref = np.array([-26.0, -20.0, -18.0, -22.0, -28.0, -60.0, -90.0])
+    wet = ref.copy()
+    wet[-2] += 25.0   # render is bright at 4k (ref rolled)
+    wet[-1] += 45.0   # and at 8k (ref dead)
+    p = _common.weighted_spectral_proximity_pct(ref, wet)
+    assert p >= 95.0, f"rolled-top brightness must not be penalised, got {p}"
+
+
+# --- per-song bar: the reference's own self-similarity floor ----------------
+# You cannot match the reference better than it matches itself across time
+# (different notes/sections). The bar is that measured floor, not a fixed 95.
+
+def test_self_floor_is_high_for_steady_material():
+    sr = 48000
+    t = np.arange(sr * 2) / sr
+    sig = 0.2 * sum(np.sin(2 * np.pi * f * t) for f in [110, 220, 440, 880]) / 4
+    assert _common.reference_self_floor(sig, sr) > 99.0
+
+
+def test_self_floor_drops_when_halves_differ():
+    sr = 48000
+    t = np.arange(sr) / sr
+    half_a = 0.2 * np.sin(2 * np.pi * 220 * t)    # low tone
+    half_b = 0.2 * np.sin(2 * np.pi * 3000 * t)   # high tone — different spectrum
+    sig = np.concatenate([half_a, half_b])
+    assert _common.reference_self_floor(sig, sr) < 90.0
+
+
+# --- exact correction curve (energy-gated, capped) --------------------------
+
+def test_correction_curve_zero_where_ref_inaudible():
+    """Never invert a dead/rolled top: where the reference has no audible
+    energy, the correction is 0 dB (ratio 1)."""
+    ref = np.array([-26.0, -20.0, -18.0, -22.0, -28.0, -60.0, -90.0])
+    wet = ref.copy()
+    wet[-2] += 25.0
+    wet[-1] += 45.0   # bright render top
+    corr = _common.correction_curve_db(ref, wet)
+    assert corr[-1] == pytest.approx(0.0)
+    assert corr[-2] == pytest.approx(0.0)
+
+
+def test_correction_curve_cuts_bass_boom():
+    ref = np.array([-26.0, -20.0, -18.0, -22.0, -26.0, -32.0, -44.0])
+    wet = ref.copy()
+    wet[0] += 20.0
+    corr = _common.correction_curve_db(ref, wet)
+    assert corr[0] < -10.0   # the correction CUTS the boom
+
+
+def test_imposing_correction_drives_residual_to_floor():
+    """Imposing the measured magnitude correction must take the proximity to
+    ~the floor (residual ~0 in audible bands), not stall partway."""
+    ref = np.array([-26.0, -20.0, -18.0, -22.0, -26.0, -32.0, -44.0])
+    wet = ref.copy()
+    wet[0] += 12.0   # boom within the cap, fully correctable
+    before = _common.weighted_spectral_proximity_pct(ref, wet)
+    corr = _common.correction_curve_db(ref, wet)
+    wet_corrected = wet + corr
+    after = _common.weighted_spectral_proximity_pct(ref, wet_corrected)
+    assert before < 85.0
+    assert after >= 99.0
+
+
+def test_correction_min_phase_fir_imposes_magnitude_not_half():
+    """The realized FIR must actually impose the target magnitude (within
+    ~1.5 dB), not under-apply by ~50% the way firwin2 with few points does."""
+    sr = 48000
+    centers = _common.THIRD_OCTAVE_CENTERS_HZ
+    target_db = np.zeros(len(centers))
+    # a +6 dB bump at 250 Hz and a -8 dB cut at 2 kHz
+    target_db[centers.index(250)] = 6.0
+    target_db[centers.index(2000)] = -8.0
+    fir = _common.correction_min_phase_fir(centers, target_db, sr, n_taps=4096)
+    # measure the FIR's magnitude response at the two control points
+    H = np.fft.rfft(fir, 16384)
+    f = np.fft.rfftfreq(16384, 1.0 / sr)
+    def gain_db_at(hz):
+        i = int(np.argmin(np.abs(f - hz)))
+        return 20.0 * np.log10(abs(H[i]) + 1e-12)
+    assert gain_db_at(250) == pytest.approx(6.0, abs=1.5)
+    assert gain_db_at(2000) == pytest.approx(-8.0, abs=1.5)
+
+
 # --- trustworthy_band_mask + band-limited proximity (AI-separated dead top) --
 
 def test_trustworthy_band_mask_all_true_for_normal_spectrum():

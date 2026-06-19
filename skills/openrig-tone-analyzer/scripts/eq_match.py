@@ -38,6 +38,10 @@ from scripts import _common  # noqa: E402
 
 SCHEMA_VERSION = 1
 
+# The gate is "within this many % of the reference's own self-floor", not a
+# fixed universal 95 — the per-song ceiling is the bar.
+SELF_FLOOR_MARGIN_PCT = 3.0
+
 # The 8 octave centres of eq_eight_band_parametric (== analyzer BANDS_HZ).
 BAND_CENTERS_HZ: list[int] = list(_common.BANDS_HZ)
 
@@ -173,13 +177,23 @@ def build_correction(
 ) -> dict[str, Any]:
     ref_sig, ref_sr = _common.load_audio(ref_path)
     wet_sig, wet_sr = _common.load_audio(wet_path)
+
+    # Coarse 8-band stage: the additive new_gains loop + dead-top mask. Kept as
+    # the coarse pre-shape; the FINE 1/3-octave metric below is the bar.
     ref_ltas = normalized_ltas(ref_sig, ref_sr)
     wet_ltas = normalized_ltas(wet_sig, wet_sr)
     band_gap = (ref_ltas - wet_ltas).tolist()
-    # The reference decides which bands are trustworthy: an AI-separated stem's
-    # dead top octave is excluded from the gap, the proximity, AND the gains —
-    # so the loop never low-passes the render to chase a missing top end.
     mask = _common.trustworthy_band_mask(ref_ltas)
+
+    # Fine, full-band 1/3-octave stage: the honest energy-weighted metric, the
+    # per-song self-floor bar, and the exact correction curve. Computed for ANY
+    # reference/render pair — nothing song-specific.
+    ref_fine = _common.third_octave_ltas(ref_sig, ref_sr)
+    wet_fine = _common.third_octave_ltas(wet_sig, wet_sr)
+    proximity = _common.weighted_spectral_proximity_pct(ref_fine, wet_fine)
+    self_floor = _common.reference_self_floor(ref_sig, ref_sr)
+    correction = _common.correction_curve_db(ref_fine, wet_fine)
+
     out: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "band_centers_hz": BAND_CENTERS_HZ,
@@ -187,15 +201,26 @@ def build_correction(
         "wet_ltas_db": _common.round_for_json(wet_ltas.tolist()),
         "band_gap_db": _common.round_for_json(band_gap),
         "total_gap_db": _common.round_for_json(gap_total_db(ref_ltas, wet_ltas, band_mask=mask)),
-        # Level-independent timbre proximity (the acceptance bar), band-limited
-        # to the trustworthy range. total_gap_db is a raw dB distance; this is
-        # the 0-100 % the tone-builder gates on.
-        "proximity_pct": _common.round_for_json(
-            _common.ltas_proximity_pct(ref_ltas, wet_ltas, band_mask=mask), ndigits=2
+        # Energy-weighted, full-band (40 Hz–16 kHz, 1/3-octave) timbre proximity
+        # — the honest bar. Falls on an audible mismatch (e.g. a sub-bass boom),
+        # is unmoved by inaudible top. The OLD mean-subtracted 8-band cosine was
+        # blind below 80 Hz and read ~99 % on boomy "dead" presets.
+        "proximity_pct": _common.round_for_json(proximity, ndigits=2),
+        # The per-song ceiling: the reference's own self-similarity across two
+        # temporal halves. The gate is "within ~SELF_FLOOR_MARGIN % of this",
+        # NOT a universal 95 — you can't match the ref better than it matches
+        # itself.
+        "self_floor_pct": _common.round_for_json(self_floor, ndigits=2),
+        "proximity_target_pct": _common.round_for_json(
+            max(0.0, self_floor - SELF_FLOOR_MARGIN_PCT), ndigits=2
         ),
-        # True when the reference's top octave is a separation artifact: the
-        # bands >= ~5 kHz were excluded, and the top is left to the amp's
-        # natural voicing rather than matched.
+        "within_floor": bool(proximity >= self_floor - SELF_FLOOR_MARGIN_PCT),
+        # Exact per-1/3-octave correction (dB to add) to impose the reference's
+        # shape: energy-gated (0 dB where the ref top has rolled off — never
+        # invert a dead top) and capped. Realize as a min-phase FIR / generic_ir.
+        "third_octave_centers_hz": list(_common.THIRD_OCTAVE_CENTERS_HZ),
+        "correction_db": _common.round_for_json(correction.tolist(), ndigits=2),
+        # True when the reference's top octave is a separation artifact.
         "ref_top_octave_dead": bool(not mask.all()),
         "trustworthy_bands_hz": [int(hz) for hz, keep in zip(BAND_CENTERS_HZ, mask) if keep],
         "new_gains": _common.round_for_json(

@@ -91,25 +91,44 @@ reamp as a bonus tighter signal.
 > stop early or to change course. When the user *does* say it's bad,
 > that specific complaint overrides the number and you act on it.
 
-**Acceptance bar: `proximity_pct` ≥ 95.** The analyzer **emits** this
-number for you — do NOT hand-convert it from a dB gap. Both `eq_match.py`
-and `compare.py` write a **`proximity_pct`** field (0–100, where 100 =
-identical normalised envelope): the cosine similarity of the
-mean-subtracted per-band LTAS vectors, mapped to a percentage. It is
-**level-independent by construction** (volume / RMS is removed before the
-comparison), so it measures only timbre. **Read that field; gate on
-`proximity_pct ≥ 95`.** You may NOT declare the preset done below 95.
-The render+compare is MANDATORY whenever a reference exists (saving
-without it is a blind guess — the Clocks v1 failure). If you iterate and
-`proximity_pct` **plateaus below 95**, that is **not done**: the gear is
-wrong — change the approach (different amp/cab capture, more EQ bands,
-revisit the gain class) and keep going; only if you genuinely cannot
-reach 95 do you STOP and report the exact `proximity_pct` to the user as
-a shortfall — never ship a sub-95 preset as "done". `total_gap_db` is a
-secondary diagnostic only; **`match_score` is NEVER the bar** (it folds
-in onsets, silence and level — the very things timbre proximity excludes).
-The user's ear can still override at any point, but their *silence* never
-lowers the 95 bar.
+**Acceptance bar: `proximity_pct` within ~3 % of the reference's own
+`self_floor_pct` — NOT a fixed 95.** The analyzer **emits** both numbers;
+do NOT hand-convert from a dB gap. `eq_match.py` writes:
+- **`proximity_pct`** (0–100) — the **energy-weighted, full-band
+  (40 Hz–16 kHz, 1/3-octave)** timbre distance. It FALLS on an audible
+  mismatch (a sub-bass boom, mud) and is unmoved by an inaudible rolled
+  top. (The old mean-subtracted 8-band cosine was blind below 80 Hz and
+  read ~99 % on boomy "dead" presets — that is the bug this replaced.)
+- **`self_floor_pct`** — the reference's own self-similarity across two
+  temporal halves: the **per-song physical ceiling**. You cannot match
+  the reference better than it matches itself (different notes/sections
+  move the spectrum). Measured ~79–96 % across real songs.
+- **`proximity_target_pct`** and **`within_floor`** — the bar and whether
+  you cleared it.
+
+**Read those fields; gate on `within_floor` (i.e. `proximity_pct ≥
+self_floor_pct − 3`).** A fixed 95 is wrong both ways: it chases an
+impossible number on material whose floor is 85, and lets a boomy preset
+that reads 95 on the blind metric pass. The render+compare is MANDATORY
+whenever a reference exists (saving without it is a blind guess — the
+Clocks v1 failure). If `proximity_pct` **plateaus below the floor**, the
+gear is wrong — change the approach (amp/cab capture, gain class) and keep
+going; only if you genuinely cannot reach the floor do you STOP and report
+both numbers as a shortfall. `total_gap_db` is a secondary diagnostic;
+**`match_score` is NEVER the bar** (it folds in onsets, silence and level).
+The user's ear can override at any point, but their *silence* never lowers
+the bar.
+
+**Closing the last ~1–1.5 dB — the exact correction-EQ IR.** `eq_match.py`
+also emits **`correction_db`** (per 1/3-octave, at `third_octave_centers_hz`):
+the exact dB curve to impose the reference's shape, **energy-gated** (0 dB
+where the ref top has rolled off — never invert a dead top into a low-pass)
+and capped. Realize it as a **min-phase FIR** (no added latency) or convolve
+it into the cab IR, and load via a `generic_ir` block — NOT `firwin2` with
+few points (under-applies ~half). The **high-pass** goes at the reference's
+**measured** low rolloff (where the ref's bass falls off), to remove the
+sub-bass boom the correction leaves; never guessed, never a low-pass to
+chase a rolled top.
 
 If the user explicitly says they have **no reference at all**, declare
 that **out loud in the chat** before Step 8 (`save_chain_preset`) — "no
@@ -1155,12 +1174,17 @@ Per iteration `<N>`:
    match, so convergence is unaffected.
 5. **Re-render** (bump `<N>`) and re-run the script.
 
-**Drive `proximity_pct` to ≥ 95; that is the stop bar.** Read it from the
-emitted `diffs/<role>-v<N>-eq.json` each iteration and **report
-`proximity_pct` per iteration** (initial → final). Stop when it reaches
-**≥ 95**. If it **plateaus below 95** (two consecutive iterations with no
-meaningful gain), the EQ alone isn't enough — the **gear is wrong**:
-change the amp/cab capture or gain class (Step 2) and restart the loop.
+**Drive `proximity_pct` to within ~3 % of `self_floor_pct`; that is the
+stop bar (NOT a fixed 95).** Read `proximity_pct`, `self_floor_pct`, and
+`within_floor` from the emitted `diffs/<role>-v<N>-eq.json` each iteration
+and **report `proximity_pct` vs the floor per iteration** (initial →
+final). Stop when **`within_floor` is true**. Then **impose the emitted
+`correction_db` curve as a min-phase FIR / `generic_ir`** (and high-pass
+at the ref's measured low rolloff) to close the last ~1–1.5 dB to the
+floor. If `proximity_pct` **plateaus well below the floor** (two
+consecutive iterations with no meaningful gain), the EQ alone isn't enough
+— the **gear is wrong**: change the amp/cab capture or gain class (Step 2)
+and restart the loop.
 `total_gap_db` may be logged as a secondary diagnostic (the proven
 "Gravity" run drove it 102 → 33 as proximity climbed), but you do **not**
 gate on it and you do **not** hand-convert a dB gap into a percentage —

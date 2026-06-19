@@ -22,6 +22,26 @@ SEED = 42
 BANDS_HZ = [80, 160, 320, 640, 1280, 2560, 5120, 10240]
 BAND_EDGES_HZ = BANDS_HZ + [20000]
 
+# Fine, full-band 1/3-octave grid for the energy-weighted spectral-difference
+# metric. Reaches down to 40 Hz so a sub-bass boom (the audible "som morto")
+# is measured — the old 8-band/80 Hz grid was blind below 80 Hz — and up to
+# 16 kHz. ~3 bands per octave.
+THIRD_OCTAVE_CENTERS_HZ = [
+    40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000,
+    1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000,
+]
+
+# A reference band sitting more than this far below the reference's loudest
+# band is treated as inaudible — it gets ~zero weight, so a naturally rolled
+# (or separation-killed) top cannot drive a destructive low-pass.
+AUDIBILITY_FLOOR_DB = 35.0
+
+# Maps the audibility-weighted RMS dB error to a 0-100 proximity. Tuned so a
+# tight match (~1 dB weighted error) lands near 95 and an audible mismatch
+# (a multi-dB boom) falls well below it.
+PROXIMITY_SCALE_DB = 20.0
+_THIRD_OCT_EDGE = 2.0 ** (1.0 / 6.0)  # 1/3-octave band half-width factor
+
 STFT_N_FFT = 2048
 STFT_HOP = 512
 
@@ -209,6 +229,218 @@ def ltas_proximity_pct(ref_ltas: Any, wet_ltas: Any, band_mask: Any = None) -> f
         return 100.0 if (nr < 1e-9 and nw < 1e-9) else 0.0
     cos = float(np.dot(r, w) / (nr * nw))
     return float(max(0.0, cos) * 100.0)
+
+
+def third_octave_ltas(
+    signal: np.ndarray,
+    sr: int,
+    silence_floor_db: float = -45.0,
+    centers: list[int] | None = None,
+) -> np.ndarray:
+    """Full-band 1/3-octave long-term average spectrum, one dB value per band.
+
+    Uses a long FFT (8192) so the sub-bass bands (40-80 Hz) have real
+    resolution — the coarse 2048 STFT cannot resolve a 40 Hz band. Silent
+    frames are dropped before averaging. NOT mean-subtracted: the absolute
+    per-band dB is returned so level alignment can be done by the weighted
+    metric, and a sub-bass excess is visible as an absolute level.
+    """
+    centers = THIRD_OCTAVE_CENTERS_HZ if centers is None else centers
+    sig = mono_mixdown(signal).astype(np.float64)
+    n_fft = 8192
+    if len(sig) < n_fft:
+        sig = np.pad(sig, (0, n_fft - len(sig)))
+    f, _, z = scipy.signal.stft(
+        sig, fs=sr, nperseg=n_fft, noverlap=n_fft - 2048, boundary=None, padded=False
+    )
+    mag = np.abs(z)
+    frame_power = (mag ** 2).sum(axis=0)
+    if frame_power.max() <= 0.0:
+        kept = mag
+    else:
+        frame_db = 10.0 * np.log10(frame_power / frame_power.max() + 1e-12)
+        keep = frame_db > silence_floor_db
+        kept = mag[:, keep] if keep.any() else mag
+    power = (kept ** 2).mean(axis=1)
+
+    out = np.empty(len(centers), dtype=np.float64)
+    for i, c in enumerate(centers):
+        lo, hi = c / _THIRD_OCT_EDGE, c * _THIRD_OCT_EDGE
+        mask = (f >= lo) & (f < hi)
+        band_power = float(power[mask].sum()) if mask.any() else 1e-12
+        out[i] = 10.0 * np.log10(band_power + 1e-12)
+    return out
+
+
+def audibility_weights(ref_band_db: Any, floor_db: float = AUDIBILITY_FLOOR_DB) -> np.ndarray:
+    """Per-band weights in [0, 1] from the reference's own loudness.
+
+    A band ``floor_db`` below the reference's loudest band gets weight 0
+    (inaudible — a rolled or dead top, or near-silent deep sub-bass); the
+    loudest band gets 1, linear in dB between. This focuses the match where
+    the ear actually hears, lets a real reference's natural high rolloff be
+    ignored (so no low-pass is chased), while still weighting the low/low-mid
+    range where a bass boom is audible.
+    """
+    r = np.asarray(ref_band_db, dtype=np.float64)
+    peak = float(r.max())
+    w = (r - (peak - floor_db)) / floor_db
+    return np.clip(w, 0.0, 1.0)
+
+
+def weighted_spectral_proximity_pct(
+    ref_band_db: Any,
+    wet_band_db: Any,
+    floor_db: float = AUDIBILITY_FLOOR_DB,
+    scale_db: float = PROXIMITY_SCALE_DB,
+) -> float:
+    """Audibility-weighted, level-independent spectral proximity in [0, 100].
+
+    Replaces the mean-subtracted 8-band cosine, which was blind below 80 Hz
+    (a sub-bass boom read ~99 %) and weighted the inaudible rolled top equally
+    (driving a destructive low-pass). Here:
+
+    1. each band is weighted by the reference's audibility (``audibility_weights``);
+    2. level is aligned by the weighted-mean residual (volume-independent —
+       a constant dB offset on ``wet`` is absorbed), NOT crude mean subtraction;
+    3. proximity = ``100 * exp(-D / scale_db)`` where ``D`` is the
+       audibility-weighted RMS dB error of the residual.
+
+    Result: the number FALLS on an audible mismatch (e.g. a +20 dB 63 Hz boom)
+    and is unmoved by brightness in bands the reference does not contain.
+
+    The penalty is deliberately ASYMMETRIC in frequency: render energy the
+    reference lacks is penalised in the low/mid range (it is audible mud — a
+    boom), but IGNORED above where the reference's top has naturally rolled
+    off (a real amp's brilho the separated stem simply lost). So the weight is
+    taken from the LOUDER of ref/wet (catching a boom even where the ref is
+    quiet), then zeroed for bands above the reference's audible top edge.
+    """
+    ref = np.asarray(ref_band_db, dtype=np.float64)
+    wet = np.asarray(wet_band_db, dtype=np.float64)
+    peak = float(ref.max())
+    thresh = peak - floor_db
+
+    # Level-align on the reference body (its audible bands), so a constant dB
+    # offset on wet is absorbed → volume-independent.
+    w_align = audibility_weights(ref, floor_db)
+    wa_total = float(w_align.sum())
+    if wa_total < 1e-9:
+        return 100.0
+    offset = float(np.sum(w_align * (wet - ref)) / wa_total)
+    wet_a = wet - offset
+    resid = wet_a - ref
+
+    # Top edge of the reference's audible range: the highest band still within
+    # floor_db of the body. Above it the reference has rolled off — ignore the
+    # render's brilho there (never penalise it, never low-pass to chase it).
+    audible = np.where(ref >= thresh)[0]
+    top_idx = int(audible[-1]) if len(audible) else len(ref) - 1
+
+    # Penalty weight from the LOUDER of ref/wet (so a boom the ref lacks still
+    # counts), zeroed above the reference's rolled-off top.
+    louder = np.maximum(ref, wet_a)
+    w_pen = np.clip((louder - thresh) / floor_db, 0.0, 1.0)
+    if top_idx + 1 < len(w_pen):
+        w_pen[top_idx + 1:] = 0.0
+
+    total = float(w_pen.sum())
+    if total < 1e-9:
+        return 100.0
+    rms_db = float(np.sqrt(np.sum(w_pen * resid ** 2) / total))
+    return float(100.0 * np.exp(-rms_db / scale_db))
+
+
+def reference_self_floor(signal: np.ndarray, sr: int) -> float:
+    """The reference's own self-similarity proximity across time — the per-song
+    physical ceiling for a match.
+
+    Split the reference into two temporal halves and score one against the
+    other with the energy-weighted metric. A render can never be MORE faithful
+    than the reference is to itself (different notes/sections move the LTAS), so
+    this is the honest bar: "get within X% of the ref's own floor", not a fixed
+    universal 95. Measured 79-92% across real songs.
+    """
+    sig = mono_mixdown(signal).astype(np.float64)
+    n = len(sig)
+    if n < 4:
+        return 100.0
+    half = n // 2
+    a = third_octave_ltas(sig[:half], sr)
+    b = third_octave_ltas(sig[half:], sr)
+    return weighted_spectral_proximity_pct(a, b)
+
+
+def correction_curve_db(
+    ref_band_db: Any,
+    wet_band_db: Any,
+    floor_db: float = AUDIBILITY_FLOOR_DB,
+    cap_db: float = 18.0,
+) -> np.ndarray:
+    """Per-band correction (dB to ADD to the render) to impose the reference's
+    spectral shape, energy-gated and capped.
+
+    - Level-aligned (volume-independent) before differencing.
+    - Energy-gated: where the reference has no audible energy (a rolled or dead
+      top), the correction is 0 dB (ratio 1) — never invert a dead top into a
+      huge cut (the low-pass that kills brilho). The deep sub-bass below the
+      reference's low edge is also left at 0 here — that boom is removed by the
+      high-pass placed at the reference's measured low rolloff, not by this
+      curve.
+    - Capped to +/- ``cap_db`` so a near-silent band can't demand an absurd move.
+    """
+    ref = np.asarray(ref_band_db, dtype=np.float64)
+    wet = np.asarray(wet_band_db, dtype=np.float64)
+    w = audibility_weights(ref, floor_db)
+    total = float(w.sum())
+    offset = float(np.sum(w * (wet - ref)) / total) if total > 1e-9 else 0.0
+    wet_a = wet - offset
+    corr = ref - wet_a
+    # Gate ONLY the rolled-off TOP (above the reference's audible top edge):
+    # there ref ~ 0, so ref/render would invert to a huge cut = a low-pass that
+    # kills brilho. Below that edge the correction is kept — a low-end boom IS
+    # cut (a cut of render excess is safe; it is not "inverting a dead band").
+    thresh = float(ref.max()) - floor_db
+    audible = np.where(ref >= thresh)[0]
+    top_idx = int(audible[-1]) if len(audible) else len(ref) - 1
+    if top_idx + 1 < len(corr):
+        corr[top_idx + 1:] = 0.0
+    return np.clip(corr, -cap_db, cap_db)
+
+
+def correction_min_phase_fir(
+    centers_hz: list[int],
+    corr_db: Any,
+    sr: int,
+    n_taps: int = 4096,
+) -> np.ndarray:
+    """Realize a fractional-octave correction curve as a MIN-PHASE FIR.
+
+    Min-phase ⇒ no bulk latency (unlike a linear-phase design). Built by the
+    real-cepstrum method on a dense interpolation of the curve — this imposes
+    the target magnitude faithfully, unlike ``firwin2`` with few control points
+    which under-applies the response by roughly half.
+    """
+    centers = np.asarray(centers_hz, dtype=np.float64)
+    db = np.asarray(corr_db, dtype=np.float64)
+    nfft = 1 << int(np.ceil(np.log2(max(n_taps * 2, 8192))))
+    freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
+    # interpolate the curve in log-frequency, holding the edge values
+    log_f = np.log(np.clip(freqs, 1.0, None))
+    mag_db = np.interp(log_f, np.log(centers), db, left=db[0], right=db[-1])
+    mag = 10.0 ** (mag_db / 20.0)
+
+    # real-cepstrum min-phase reconstruction
+    full = np.concatenate([mag, mag[-2:0:-1]])           # even, length nfft
+    log_mag = np.log(full + 1e-12)
+    cep = np.fft.ifft(log_mag).real
+    win = np.zeros(nfft)
+    win[0] = 1.0
+    win[1: nfft // 2] = 2.0
+    win[nfft // 2] = 1.0
+    min_phase = np.exp(np.fft.fft(cep * win))
+    ir = np.fft.ifft(min_phase).real
+    return ir[:n_taps].astype(np.float64)
 
 
 def compute_spectral_centroid_hz(signal: np.ndarray, sr: int) -> float:
