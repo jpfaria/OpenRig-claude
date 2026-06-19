@@ -351,24 +351,56 @@ def weighted_spectral_proximity_pct(
     return float(100.0 * np.exp(-rms_db / scale_db))
 
 
-def reference_self_floor(signal: np.ndarray, sr: int) -> float:
+def reference_self_floor(
+    signal: np.ndarray,
+    sr: int,
+    n_windows: int = 6,
+    silence_rel_db: float = -25.0,
+) -> float:
     """The reference's own self-similarity proximity across time — the per-song
     physical ceiling for a match.
 
-    Split the reference into two temporal halves and score one against the
-    other with the energy-weighted metric. A render can never be MORE faithful
-    than the reference is to itself (different notes/sections move the LTAS), so
-    this is the honest bar: "get within X% of the ref's own floor", not a fixed
-    universal 95. Measured 79-92% across real songs.
+    A render can never be MORE faithful than the reference is to itself
+    (different notes/sections move the LTAS), so this is the honest bar: "get
+    within ~3% of the ref's own floor", not a fixed universal 95.
+
+    Robust estimate: split into ``n_windows`` signal-bearing windows (dropping
+    near-silent ones — a quiet intro must not tank a lead's floor), and take
+    the MEDIAN proximity of each window against the median spectrum of the set.
+    The naive 2-half split was fragile on short/sparse stems (a silent intro or
+    a section change scored an artificially low floor); the median is not moved
+    by one odd window. Falls back to the 2-half split for very short signals.
     """
     sig = mono_mixdown(signal).astype(np.float64)
     n = len(sig)
     if n < 4:
         return 100.0
-    half = n // 2
-    a = third_octave_ltas(sig[:half], sr)
-    b = third_octave_ltas(sig[half:], sr)
-    return weighted_spectral_proximity_pct(a, b)
+
+    def _two_half() -> float:
+        half = n // 2
+        return weighted_spectral_proximity_pct(
+            third_octave_ltas(sig[:half], sr), third_octave_ltas(sig[half:], sr)
+        )
+
+    win = n // n_windows
+    if win < int(0.25 * sr):  # windows too short to measure — fall back
+        return _two_half()
+
+    overall_rms = compute_rms_db(sig.astype(np.float32))
+    segs: list[np.ndarray] = []
+    for i in range(n_windows):
+        chunk = sig[i * win:(i + 1) * win]
+        if len(chunk) < int(0.2 * sr):
+            continue
+        if compute_rms_db(chunk.astype(np.float32)) < overall_rms + silence_rel_db:
+            continue  # near-silent window — not part of the timbre
+        segs.append(third_octave_ltas(chunk, sr))
+    if len(segs) < 2:
+        return _two_half()
+
+    median_shape = np.median(np.vstack(segs), axis=0)
+    proximities = [weighted_spectral_proximity_pct(median_shape, s) for s in segs]
+    return float(np.median(proximities))
 
 
 def correction_curve_db(

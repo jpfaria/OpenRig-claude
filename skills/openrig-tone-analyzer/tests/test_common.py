@@ -118,6 +118,17 @@ def test_self_floor_is_high_for_steady_material():
     assert _common.reference_self_floor(sig, sr) > 99.0
 
 
+def test_self_floor_robust_to_silent_intro():
+    """A steady tone preceded by silence must still score a HIGH self-floor:
+    the silent window is dropped, not compared. The naive 2-half split scored
+    it low (silence-half vs tone-half), which tanked leads with a quiet intro."""
+    sr = 48000
+    t = np.arange(int(sr * 1.5)) / sr
+    tone = 0.2 * sum(np.sin(2 * np.pi * f * t) for f in [110, 220, 440, 880]) / 4
+    sig = np.concatenate([np.zeros(int(sr * 1.5)), tone])  # 1.5 s silence + 1.5 s tone
+    assert _common.reference_self_floor(sig, sr) > 90.0
+
+
 def test_self_floor_drops_when_halves_differ():
     sr = 48000
     t = np.arange(sr) / sr

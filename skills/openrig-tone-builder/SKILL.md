@@ -99,8 +99,9 @@ do NOT hand-convert from a dB gap. `eq_match.py` writes:
   mismatch (a sub-bass boom, mud) and is unmoved by an inaudible rolled
   top. (The old mean-subtracted 8-band cosine was blind below 80 Hz and
   read ~99 % on boomy "dead" presets — that is the bug this replaced.)
-- **`self_floor_pct`** — the reference's own self-similarity across two
-  temporal halves: the **per-song physical ceiling**. You cannot match
+- **`self_floor_pct`** — the reference's own self-similarity across
+  multiple signal-bearing windows (median, silence dropped): the **per-song
+  physical ceiling**. You cannot match
   the reference better than it matches itself (different notes/sections
   move the spectrum). Measured ~79–96 % across real songs.
 - **`proximity_target_pct`** and **`within_floor`** — the bar and whether
