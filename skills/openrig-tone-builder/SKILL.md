@@ -465,7 +465,7 @@ low/mid body** — a drop no real amp+cab makes), `eq_match.py` and
   range** — it will NOT read a false 99% off a muffled preset (the bug
   this fixes: a full-band cosine let the dead artifact band dominate the
   vector and score 99% while the tone sounded abafado). You still gate on
-  **`proximity_pct ≥ 95`** as usual.
+  the per-song bar (`proximity_pct` within ~3% of `self_floor_pct`) as usual.
 - the auto-EQ loop **HOLDS** the top bands — it will not cut them toward
   the dead ref.
 
@@ -1054,13 +1054,14 @@ two surfaces:
 
 ### 6. Render and drive the faithful number (MANDATORY before "done")
 
-> ⛔ **You optimise ONE number to a hard bar: drive the
-> level-normalised spectral-envelope (LTAS) proximity between the render
-> and the isolated-guitar reference (over the signal-bearing windows) to
-> ≥ 95%.** That number measures **timbre** (tonal balance), invariant to
+> ⛔ **You optimise ONE number to a hard bar: drive the energy-weighted,
+> full-band (1/3-octave) spectral proximity between the render and the
+> isolated-guitar reference (over the signal-bearing windows) to
+> within ~3% of the reference's own per-song floor (`self_floor_pct`).**
+> That number measures **timbre** (tonal balance), invariant to
 > which notes were played and to level — so it converges even though the
 > bundled-DI render is a different performance from the real recording.
-> You drive it up with EQ + amp/gain class. **Below 95% is not done.**
+> You drive it up with EQ + amp/gain class. **Below the per-song floor is not done.**
 > You have no ears; the **user's ear is the only override, and only when
 > the user says it's bad**. Run this BEFORE declaring done.
 
@@ -1242,8 +1243,8 @@ chat reply if you could not complete it.
 > is **not** a timid preset: under real hot playing it lands near the
 > ceiling. The headroom IS the loudness — measured on the right input.
 
-Runs **after** the Step 6 tone loop completes (envelope proximity ≥ 95%,
-or the user signed off) — so level moves never pollute the tone work —
+Runs **after** the Step 6 tone loop completes (proximity within ~3% of the
+per-song floor, or the user signed off) — so level moves never pollute the tone work —
 and **before** the final `save_chain_preset` + "done" report.
 Level is **always** gain-staged for headroom here regardless of mode,
 and **never** matched to the reference's RMS (a real reference is often
@@ -1428,12 +1429,13 @@ read-render-compare over persistent artifacts.
       loop** (Step 6.3): `scripts/eq_match.py` per iteration → applied the
       full 8-band `new_gains` vector (+ band-1 high-pass) via
       `set_block_parameter_number` → re-rendered → re-measured, until the
-      emitted **`proximity_pct` ≥ 95**. You did NOT hand-pick "the worst
+      emitted **`proximity_pct`** reached the per-song bar (`within_floor`
+      — within ~3% of `self_floor_pct`). You did NOT hand-pick "the worst
       band" by eye, did NOT hand-convert a dB gap into a %, and did NOT
       gate on `total_gap_db` or chase a raw `match_score`. You reported
-      `proximity_pct` per iteration (initial → final). If it plateaued
-      below 95 you changed the gear (Step 2) and restarted — you did NOT
-      call a sub-95 preset done. You never asserted a sonic verdict of
+      `proximity_pct` vs the floor per iteration (initial → final). If it
+      plateaued below the floor you changed the gear (Step 2) and restarted
+      — you did NOT call a below-floor preset done. You never asserted a sonic verdict of
       your own; the user's ear redirected the build ONLY when the user
       said it's bad.
 - [ ] You did NOT set the delay/reverb blocks from the fingerprint's
@@ -1495,7 +1497,7 @@ read-render-compare over persistent artifacts.
   frequencies. The script maps gains to the fixed grid
   `[80,160,320,640,1280,2560,5120,10240]` Hz — set the band freqs to those
   centers first, or the gains land on the wrong bands (Step 6.3).
-- Chasing ≥95% (or amp-swapping) against a stem whose top-band gap
+- Chasing the floor (or amp-swapping) against a stem whose top-band gap
   exceeds the EQ high-shelf's ~24 dB max cut (ref 10k far below where any
   amp renders it). That's a separation artifact — the bar is unreachable;
   cap at the overlaid floor (~35) and tell the user (Step 0 ref-sanity
@@ -1553,11 +1555,11 @@ read-render-compare over persistent artifacts.
 - Writing a YAML preset file to disk *without* the user having picked
   the file-only path in Step −1.
 - Reporting "preset saved" / "done" to the user WITHOUT having driven
-  the envelope-proximity loop (Step 6) to ≥ 95% when any reference
-  exists. **This is the failure mode the user called out explicitly**:
-  "you're missing the most important thing. you should run the render".
-  If you reach `save_chain_preset` and have not yet rendered + measured
-  proximity to ≥ 95%, you have saved a guess. Restart from Step 6.
+  the envelope-proximity loop (Step 6) to the per-song floor when any
+  reference exists. **This is the failure mode the user called out
+  explicitly**: "you're missing the most important thing. you should run
+  the render". If you reach `save_chain_preset` and have not yet rendered +
+  measured proximity to the floor, you have saved a guess. Restart from Step 6.
 - **Asserting your OWN sonic verdict — "it sounds muffled / dark / the
   delay is too long".** You (the agent) cannot hear. Any such judgement
   coming from you is fabrication (same prohibition as Step 0's
@@ -1569,9 +1571,10 @@ read-render-compare over persistent artifacts.
   Against a real recording the raw score folds in note onsets, silence
   and level, so it cannot converge (the "Gravity" stem stalled at a
   166→131 dB gap). The number you drive is the **level-normalised LTAS
-  envelope proximity %**, and the bar is **≥ 95%**. Reporting a raw-score
-  "plateau" as done, or calling a sub-95% envelope proximity done, is the
-  failure — change the gear/EQ until proximity hits 95%.
+  envelope proximity %**, and the bar is **within ~3% of the per-song
+  `self_floor_pct`**. Reporting a raw-score "plateau" as done, or calling a
+  below-floor proximity done, is the failure — change the gear/EQ until
+  proximity reaches the floor.
 - **Dismissing the user's ear when the user says it's bad.** When the
   user says "it sounds muffled" / "too dark" / "the delay is too long",
   that complaint **overrides the number** — act on it directly. Replying
@@ -1706,22 +1709,22 @@ read-render-compare over persistent artifacts.
 | "The user's `tuner_chromatic` mention means I should add it as a block" | Tuner is a rig-wide utility; it has its own enable command. The preset doesn't own it. |
 | "The mix's centroid says the guitar is dark, so I'll EQ-darken" | The mix's centroid is dominated by bass/drums/keys. Look at an isolated stem before darkening — or you will produce a muddy preset (real Clocks rebuild failed for exactly this reason). |
 | "I built it from research, no need to render" | Research = educated guess. The render is mandatory both modes; the only validated preset is one you rendered and measured. If the user has a reference, run it. |
-| "I'll render+measure AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → measure proximity → adjust → … until proximity ≥ 95% (or the user signs off). Reporting "done" after the FIRST save is reporting on a guess. |
-| "Proximity is stuck at 88%, that's close enough / the best I can get" | 95% is the bar, not "best effort". EQ alone plateauing means the gear is wrong — change the amp/cab capture, gain class, or add a boost, and keep going. Only report a shortfall if 95% is genuinely unreachable; never ship sub-95% as done. |
+| "I'll render+measure AFTER saving, that's the natural order" | The save IS part of the loop, not a terminator. Save → render → measure proximity → adjust → … until proximity reaches the per-song floor (or the user signs off). Reporting "done" after the FIRST save is reporting on a guess. |
+| "Proximity is stuck at 88%, that's close enough / the best I can get" | The bar is the per-song `self_floor_pct` (within ~3%), not a fixed 95 and not "best effort". If 88% is below the floor, the gear is wrong — change the amp/cab capture, gain class, or add a boost. If 88% IS within ~3% of the floor (the material's own ceiling), you're DONE — stop chasing an impossible number. |
 | "I'll just nudge the EQ bands by ear / by eye until it looks closer" | That's the band-by-band hand-tuning the user rejected as guessing. The match is **generated automatically**: run `scripts/eq_match.py` (Step 6.3), apply the full 8-band `new_gains` vector it returns, re-render, repeat. You do not pick bands by hand. |
-| "The EQ shape won't close, I'll just keep adding more EQ bands / moves manually" | If the auto-loop's `proximity_pct` plateaus below 95, EQ can't fix it — the **gear** (amp/cab/gain class) is wrong. Change it in Step 2 and restart the loop; don't pile manual EQ moves onto the wrong amp. |
-| "I'll convert `total_gap_db` to a proximity % myself / gate on the dB gap" | Don't hand-convert. The analyzer **emits `proximity_pct`** (level-independent, 0–100) in both the eq_match JSON and `diff.json`. Read that field and gate on ≥ 95. `total_gap_db` is a raw dB diagnostic, `match_score` folds in level/onsets/silence — neither is the bar. |
+| "The EQ shape won't close, I'll just keep adding more EQ bands / moves manually" | If the auto-loop's `proximity_pct` plateaus below the per-song floor, EQ can't fix it — the **gear** (amp/cab/gain class) is wrong. Change it in Step 2 and restart the loop; don't pile manual EQ moves onto the wrong amp. |
+| "I'll convert `total_gap_db` to a proximity % myself / gate on the dB gap" | Don't hand-convert. The analyzer **emits `proximity_pct`** + **`self_floor_pct`** + **`within_floor`** (energy-weighted, full-band, level-independent). Read those and gate on `within_floor` (within ~3% of the floor). `total_gap_db` is a raw dB diagnostic, `match_score` folds in level/onsets/silence — neither is the bar. |
 | "The ref is dark up top, so I'll low-pass / cut the top bands (or pick a darker amp) to match it" | If `ref_top_octave_dead` is true, the ref is a **separated stem that lost its top octave** — no real amp is that dark. Low-passing to match it is the "99% but sounds muffled" bug. The analyzer already excludes ≥ ~5 kHz from `proximity_pct` and HOLDS those gains; let the amp's natural brilho carry the presence. Never cut the top or swap to a darker amp to chase a dead top. |
 | "The user sent the whole song, I'll fingerprint/compare against that" | A full mix is dominated by drums/bass/vocals — matching a guitar render to it is hopeless ("nothing like it"). Isolate the guitar first (source separation); if you can't, ask for an isolated stem. Only ever compare guitar-against-guitar. |
-| "I'll chase the analyzer's raw `match_score`" | Against a real recording the raw score folds in note onsets, silence and level, so it can't converge (the "Gravity" 166→131 dB stall). Chase the **level-normalised LTAS envelope proximity %** — it measures timbre and reaches ≥ 95%. |
+| "I'll chase the analyzer's raw `match_score`" | Against a real recording the raw score folds in note onsets, silence and level, so it can't converge (the "Gravity" 166→131 dB stall). Chase the **energy-weighted full-band proximity %** — it measures timbre and reaches the per-song floor. |
 | "It sounds muffled to me, so I'll EQ-brighten" / "the delay sounds too long, I'll shorten it" | **You have no ears.** You cannot have a sonic opinion — asserting one is fabrication. Act on the **measurement**; the only ear is the **user's**, and only when *they* say it's bad. Do not invent an ear verdict to drive a move. |
-| "The stem is a real recording so the number is useless — I'll just judge by ear instead" | Wrong both ways. The number is NOT useless — the **level-normalised LTAS envelope proximity** measures timbre and reaches ≥ 95% even across performances; it's the only thing you can act on because you can't hear. There is no "judge by ear" for you; the user's ear is the sole human override, on the user's word. |
-| "The raw `match_score` is climbing toward done" | The raw score conflates note/silence/level and can't converge on a real recording (the "Gravity" 166→131 dB stall). Drive the **envelope proximity %** to ≥ 95% instead — that is the bar, and it does converge. |
+| "The stem is a real recording so the number is useless — I'll just judge by ear instead" | Wrong both ways. The number is NOT useless — the **energy-weighted full-band proximity** measures timbre and reaches the per-song floor even across performances; it's the only thing you can act on because you can't hear. There is no "judge by ear" for you; the user's ear is the sole human override, on the user's word. |
+| "The raw `match_score` is climbing toward done" | The raw score conflates note/silence/level and can't converge on a real recording (the "Gravity" 166→131 dB stall). Drive the **energy-weighted full-band proximity %** to the per-song floor instead — that is the bar, and it does converge. |
 | "The user says it sounds muffled, but the measurement looks fine — I'll trust the number" | When the **user** says it's bad, that complaint **overrides** the number — act on it directly. The measurement is your *default* basis; the user's stated verdict is the override. Ignoring the user is forbidden. |
 | "The fingerprint says delay 865 ms / 39% — I'll set the delay block to that" | `time_fx` is artifact-prone: that 865 ms was a *reverb tail* misread as delay, and the "spring" was a smooth hall. Delay/reverb come from research + the song, never from `time_fx`. It is a weak corroborator only. |
 | "The stem's centroid is ~480 Hz, so the tone is dark — I'll low-pass / EQ-darken" | On a sparse or separated stem the centroid tracks *which notes were held* (sustained low notes + silence), not timbre. Low-passing off it muffled the real "Gravity" build to 750 Hz. Read centroid as directional shape, cross-check the spectrogram + LTAS, never low-pass off the scalar. |
 | "The reference RMS is quiet, so I'll match it / leave the preset quiet" | Level is never matched to the ref — a real reference is often quiet by performance or mastering. Step 7 gain-stages the DI peak to ≈ -7 dBFS with headroom, independently of the reference. Matching RMS ships a broken preset. |
-| "I'll treat the bundled-DI-vs-real-stem raw `match_score` as the target" | The bundled DI is a *different performance* from the real stem, so the raw score conflates note/silence with tone and can't converge. The target is the **level-normalised LTAS envelope proximity ≥ 95%** — that isolates timbre and does converge. |
+| "I'll treat the bundled-DI-vs-real-stem raw `match_score` as the target" | The bundled DI is a *different performance* from the real stem, so the raw score conflates note/silence with tone and can't converge. The target is the **energy-weighted full-band proximity reaching its per-song floor** — that isolates timbre and does converge. |
 | "The standard output target is -18 dBFS, I'll trim to that" | Fabricated standard. -18 dBFS is a DAW/broadcast headroom convention, not a rig preset law — and on the DI it's genuinely quiet. This skill's law is **headroom-on-the-DI**: peak in [-8.0, -6.0] dBFS, aim ≈ -7 (Step 7), limiter idle. Not -18 (quiet), not -1 (clips live). |
 | "I'll maximize the DI render to ≈ -1 dBFS so it's nice and loud" | That's the clipping root cause. The bundled DI is a conservative fixed input; a hotter live take then blows past the ceiling and the limiter clamps every transient ("estourando"). Gain-stage the DI peak to ≈ -7 dBFS — under real hot playing that lands near the ceiling. -7 on the DI IS the loud level, measured on the right input. |
 | "Tone converged, the level is a matter of taste — I'll leave the trim at default" | Level is not taste, it's Step 7: measure the DI peak, set the **pre-limiter** gain until it lands in [-8.0, -6.0] dBFS, confirm with a re-render that the limiter is idle. A default-trim preset is unverified, not done. |

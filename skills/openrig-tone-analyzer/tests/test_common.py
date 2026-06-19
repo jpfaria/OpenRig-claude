@@ -163,6 +163,24 @@ def test_imposing_correction_drives_residual_to_floor():
     assert after >= 99.0
 
 
+def test_correction_ir_convolved_lifts_proximity():
+    """End-to-end: building the correction IR from (ref, boomy render) and
+    convolving it INTO the render must materially close the spectral gap."""
+    import scipy.signal
+    sr = 48000
+    t = np.arange(int(sr * 2.0)) / sr
+    base = 0.2 * sum(np.sin(2 * np.pi * f * t) for f in [110, 220, 440, 880, 1760, 3520]) / 6
+    ref = base.astype(np.float64)
+    render = (base + 0.6 * np.sin(2 * np.pi * 63 * t)).astype(np.float64)  # +63 Hz boom
+    rl = _common.third_octave_ltas
+    before = _common.weighted_spectral_proximity_pct(rl(ref, sr), rl(render, sr))
+    ir = _common.correction_ir(ref, sr, render, sr, n_taps=8192)
+    corrected = scipy.signal.fftconvolve(render, ir)[: len(render)]
+    after = _common.weighted_spectral_proximity_pct(rl(ref, sr), rl(corrected, sr))
+    assert before < 85.0
+    assert after > before + 8.0   # the IR closes the gap, not 50% under-applied
+
+
 def test_correction_min_phase_fir_imposes_magnitude_not_half():
     """The realized FIR must actually impose the target magnitude (within
     ~1.5 dB), not under-apply by ~50% the way firwin2 with few points does."""

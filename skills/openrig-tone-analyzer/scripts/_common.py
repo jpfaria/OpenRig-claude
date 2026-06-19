@@ -443,6 +443,26 @@ def correction_min_phase_fir(
     return ir[:n_taps].astype(np.float64)
 
 
+def correction_ir(
+    ref_sig: np.ndarray,
+    ref_sr: int,
+    wet_sig: np.ndarray,
+    wet_sr: int,
+    n_taps: int = 8192,
+) -> np.ndarray:
+    """Build the min-phase correction-EQ impulse response from (ref, render).
+
+    Measures both 1/3-octave LTAS, derives the energy-gated/capped correction
+    curve, and realizes it as a min-phase FIR. Convolve this into the render
+    (or the cab IR) — via a generic_ir block — to impose the reference's shape
+    with no added latency.
+    """
+    ref_f = third_octave_ltas(ref_sig, ref_sr)
+    wet_f = third_octave_ltas(wet_sig, wet_sr)
+    corr = correction_curve_db(ref_f, wet_f)
+    return correction_min_phase_fir(list(THIRD_OCTAVE_CENTERS_HZ), corr, ref_sr, n_taps)
+
+
 def compute_spectral_centroid_hz(signal: np.ndarray, sr: int) -> float:
     f, mag = _stft_mag(signal, sr)
     # per-frame centroid, then median across frames

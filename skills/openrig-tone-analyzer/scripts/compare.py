@@ -26,6 +26,10 @@ from scripts import _common, analyze  # noqa: E402
 
 SCHEMA_VERSION = 2
 
+# The gate is "within this many % of the reference's own self-floor" (kept in
+# sync with eq_match.SELF_FLOOR_MARGIN_PCT).
+SELF_FLOOR_MARGIN_PCT = 3.0
+
 WEIGHTS = {
     "band_energy": 0.40,
     "centroid":    0.15,
@@ -213,6 +217,14 @@ def _verdict_db(delta: float, asc_word: str, desc_word: str, near_thresh: float 
     return desc_word if delta > 0 else asc_word
 
 
+def _section_slice(signal: np.ndarray, sr: int, section: dict) -> np.ndarray:
+    """Mono audio for a section's time range, for the full-band proximity metric."""
+    a = int(section["start_s"] * sr)
+    b = int(section["end_s"] * sr)
+    sl = signal[a:b] if signal.ndim == 1 else signal[:, a:b]
+    return _common.mono_mixdown(sl)
+
+
 def compute_delta(ref_sec: dict, wet_sec: dict, alignment_confidence: float) -> dict[str, Any]:
     rms_d = wet_sec["loudness"]["rms_db"] - ref_sec["loudness"]["rms_db"]
     centroid_d = wet_sec["spectrum"]["spectral_centroid_hz"] - ref_sec["spectrum"]["spectral_centroid_hz"]
@@ -397,6 +409,8 @@ def assemble_diff(
     delta: dict,
     match_score: float,
     recommendations: list[dict],
+    proximity_pct: float,
+    self_floor_pct: float,
 ) -> dict[str, Any]:
     band_deltas = [abs(b["delta_db"]) for b in delta["band_energy_db"]]
     max_band_delta = max(band_deltas) if band_deltas else 0.0
@@ -405,20 +419,11 @@ def assemble_diff(
         and max_band_delta <= CONVERGENCE_THRESHOLD["max_abs_band_delta_db"]
     )
 
-    # Level-independent timbre proximity over the matched signal-bearing
-    # windows (the section band_energy_db IS that section's LTAS). This is the
-    # acceptance number the tone-builder gates on — distinct from match_score,
-    # which folds in onsets / silence / level and must NOT be the bar. The mask
-    # excludes an AI-separated stem's dead top octave so it can't inflate the
-    # number (the "99 % but sounds muffled" failure).
-    ref_band_ltas = matched_section["spectrum"]["band_energy_db"]
-    band_mask = _common.trustworthy_band_mask(ref_band_ltas)
-    proximity_pct = _common.ltas_proximity_pct(
-        ref_band_ltas,
-        wet_section["spectrum"]["band_energy_db"],
-        band_mask=band_mask,
-    )
-    ref_top_octave_dead = bool(not band_mask.all())
+    # The honest bar: energy-weighted, full-band proximity (computed in main()
+    # from the matched section's audio) vs the reference's own per-song
+    # self-floor. match_score stays as a secondary number; it folds in
+    # onsets / silence / level and is NOT the bar.
+    within_floor = bool(proximity_pct >= self_floor_pct - SELF_FLOOR_MARGIN_PCT)
 
     diff = {
         "schema_version": SCHEMA_VERSION,
@@ -433,7 +438,8 @@ def assemble_diff(
             "section_id_reason": wet_reason,
         },
         "proximity_pct": float(proximity_pct),
-        "ref_top_octave_dead": ref_top_octave_dead,
+        "self_floor_pct": float(self_floor_pct),
+        "within_floor": within_floor,
         "match_score": float(match_score),
         "delta": delta,
         "recommendations": recommendations,
@@ -572,10 +578,21 @@ def main(argv: list[str] | None = None) -> int:
     delta = compute_delta(matched_section, wet_section, align_conf)
     match_score = compute_match_score(delta)
     recommendations = build_recommendations(delta, matched_section, wet_section)
+
+    # Energy-weighted, full-band proximity over the matched section audio +
+    # the reference's per-song self-floor (the honest bar — see eq_match.py).
+    ref_slice = _section_slice(ref_signal, ref_sr, matched_section)
+    wet_slice = _section_slice(wet_signal, wet_sr, wet_section)
+    ref_ltas = _common.third_octave_ltas(ref_slice, ref_sr)
+    wet_ltas = _common.third_octave_ltas(wet_slice, wet_sr)
+    proximity_pct = _common.weighted_spectral_proximity_pct(ref_ltas, wet_ltas)
+    self_floor_pct = _common.reference_self_floor(ref_slice, ref_sr)
+
     diff = assemble_diff(
         ref_fp, wet_fp, matched_section, matched_reason,
         wet_section, wet_reason,
         delta, match_score, recommendations,
+        proximity_pct, self_floor_pct,
     )
 
     out_dir = analyze.resolve_out_dir(args.out_dir)

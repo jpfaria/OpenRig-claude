@@ -394,94 +394,72 @@ def test_diff_carries_rendered_section_id_reason(
     assert diff["rendered"]["section_id"] == "section_1"
 
 
-# Test G: proximity_pct — level-independent timbre number, distinct from match_score
-def test_diff_emits_level_independent_proximity_pct(
+def _tone(sr, secs, freqs, level=0.2):
+    import numpy as np
+    t = np.arange(int(sr * secs)) / sr
+    return (level * sum(np.sin(2 * np.pi * f * t) for f in freqs) / len(freqs)).astype("float32")
+
+
+# Test G: proximity_pct (energy-weighted, full-band) + self_floor + within_floor,
+# computed from the matched section audio — level-independent.
+def test_diff_emits_proximity_self_floor_and_within_floor(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """compare.py must emit proximity_pct (timbre, level-independent), ALONGSIDE
-    match_score. Same band SHAPE at a different overall level → proximity ~100%,
-    even though match_score is dragged down by the level-laden band delta."""
     import numpy as np
     from scripts import compare as compare_mod
 
-    shape = [-30.0, -22.0, -18.0, -20.0, -24.0, -28.0, -33.0, -40.0]
-    wet_fp = _make_fingerprint([
-        _make_section(0, rms_db=-10.0, centroid_hz=1200.0,
-                      band_energy_db=[x + 12.0 for x in shape], thd_pct=10.0,
-                      presence="lead", tone_profile="crunch"),
-    ], sha="wetProx")
-    ref_fp = _make_fingerprint([
-        _make_section(0, rms_db=-22.0, centroid_hz=1200.0,
-                      band_energy_db=list(shape), thd_pct=10.0,
-                      presence="lead", tone_profile="crunch"),
-    ], sha="refProx")
+    sr = 48000
+    ref_sig = _tone(sr, 2.0, [110, 220, 440, 880, 1760])
+    wet_sig = (ref_sig * 10 ** (12.0 / 20.0)).astype(np.float32)  # +12 dB, same shape
+    wet_fp = _make_fingerprint([_make_section(0, rms_db=-10.0, centroid_hz=1200.0,
+                                presence="lead", tone_profile="crunch")], sha="wetP")
+    ref_fp = _make_fingerprint([_make_section(0, rms_db=-22.0, centroid_hz=1200.0,
+                                presence="lead", tone_profile="crunch")], sha="refP")
 
-    sig = np.zeros(48000, dtype=np.float32)
+    def fake(path):
+        return (ref_fp, ref_sig, sr) if "ref" in str(path) else (wet_fp, wet_sig, sr)
 
-    def fake_run_analyze_cached(path):
-        if "ref" in str(path):
-            return ref_fp, sig, 48000
-        return wet_fp, sig, 48000
-
-    monkeypatch.setattr(compare_mod, "run_analyze_cached", fake_run_analyze_cached)
-    monkeypatch.setattr(compare_mod, "render_ab_spec_png",
-                        lambda *a, **kw: tmp_path / "ab_spec.png")
+    monkeypatch.setattr(compare_mod, "run_analyze_cached", fake)
+    monkeypatch.setattr(compare_mod, "render_ab_spec_png", lambda *a, **k: tmp_path / "ab.png")
 
     out_dir = tmp_path / "out"
-    rc = compare_mod.main(["/tmp/ref.wav", "/tmp/wet.wav", "--out-dir", str(out_dir)])
-    assert rc == 0
+    assert compare_mod.main(["/tmp/ref.wav", "/tmp/wet.wav", "--out-dir", str(out_dir)]) == 0
     diff = json.loads((out_dir / "diff.json").read_text())
-
-    assert "proximity_pct" in diff
-    assert 0.0 <= diff["proximity_pct"] <= 100.0
-    # same shape shifted +12 dB → identical timbre
-    assert diff["proximity_pct"] == pytest.approx(100.0, abs=0.5)
-    # match_score still carries the level-laden band delta → not 100%-equivalent
-    assert diff["match_score"] < 0.95
-    # the two numbers measure different things
-    assert "match_score" in diff
+    assert {"proximity_pct", "self_floor_pct", "within_floor"} <= set(diff)
+    # same shape at +12 dB → level-independent → near 100
+    assert diff["proximity_pct"] >= 99.0
+    assert diff["within_floor"] is True
 
 
-# Test H: proximity_pct band-limits the dead top octave of a separated stem
-def test_diff_proximity_band_limited_for_dead_top_stem(
+# Test H: a sub-bass boom the ref lacks must TANK proximity (the old metric
+# read ~99% on boomy "dead" presets; the new one cannot).
+def test_diff_proximity_drops_on_bass_boom(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A separated ref with a dead top octave + a bright wet that matches the
-    trustworthy range must score HIGH proximity (dead top excluded) and flag
-    ref_top_octave_dead. Prevents the '99% but sounds muffled' result."""
     import numpy as np
     from scripts import compare as compare_mod
 
-    ref_bands = [-20.0, -16.0, -14.0, -15.0, -18.0, -22.0, -30.0, -48.0]  # dead top
-    wet_bands = [-20.0, -16.0, -14.0, -15.0, -18.0, -22.0, -24.0, -28.0]  # live top
-    wet_fp = _make_fingerprint([
-        _make_section(0, rms_db=-12.0, centroid_hz=1200.0,
-                      band_energy_db=wet_bands, thd_pct=10.0,
-                      presence="lead", tone_profile="crunch"),
-    ], sha="wetDead")
-    ref_fp = _make_fingerprint([
-        _make_section(0, rms_db=-12.0, centroid_hz=1200.0,
-                      band_energy_db=ref_bands, thd_pct=10.0,
-                      presence="lead", tone_profile="crunch"),
-    ], sha="refDead")
+    sr = 48000
+    t = np.arange(int(sr * 2)) / sr
+    base = _tone(sr, 2.0, [110, 220, 440, 880, 1760])
+    ref_sig = base
+    wet_sig = (base + 0.6 * np.sin(2 * np.pi * 63 * t)).astype(np.float32)  # +63 Hz boom
+    wet_fp = _make_fingerprint([_make_section(0, rms_db=-10.0, centroid_hz=1200.0,
+                                presence="lead", tone_profile="crunch")], sha="wetB")
+    ref_fp = _make_fingerprint([_make_section(0, rms_db=-10.0, centroid_hz=1200.0,
+                                presence="lead", tone_profile="crunch")], sha="refB")
 
-    sig = np.zeros(48000, dtype=np.float32)
+    def fake(path):
+        return (ref_fp, ref_sig, sr) if "ref" in str(path) else (wet_fp, wet_sig, sr)
 
-    def fake_run_analyze_cached(path):
-        if "ref" in str(path):
-            return ref_fp, sig, 48000
-        return wet_fp, sig, 48000
-
-    monkeypatch.setattr(compare_mod, "run_analyze_cached", fake_run_analyze_cached)
-    monkeypatch.setattr(compare_mod, "render_ab_spec_png",
-                        lambda *a, **kw: tmp_path / "ab_spec.png")
+    monkeypatch.setattr(compare_mod, "run_analyze_cached", fake)
+    monkeypatch.setattr(compare_mod, "render_ab_spec_png", lambda *a, **k: tmp_path / "ab.png")
 
     out_dir = tmp_path / "out"
-    rc = compare_mod.main(["/tmp/ref.wav", "/tmp/wet.wav", "--out-dir", str(out_dir)])
-    assert rc == 0
+    assert compare_mod.main(["/tmp/ref.wav", "/tmp/wet.wav", "--out-dir", str(out_dir)]) == 0
     diff = json.loads((out_dir / "diff.json").read_text())
-    assert diff["ref_top_octave_dead"] is True
-    assert diff["proximity_pct"] >= 99.0   # trustworthy range matches → high
+    assert diff["proximity_pct"] < 90.0
+    assert diff["within_floor"] is False
 
 
 # Test F: pick_ref_section new signature receives wet_section explicitly
