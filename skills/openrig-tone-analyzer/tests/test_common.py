@@ -21,31 +21,6 @@ from scripts import _common
 SR = 22050
 
 
-# --- ltas_proximity_pct (level-independent timbre proximity) ----------------
-
-def test_proximity_pct_identical_shape_is_100():
-    v = np.array([4.0, 3.0, 1.0, -1.0, -2.0, 0.0, 2.0, -5.0])
-    assert _common.ltas_proximity_pct(v, v) == pytest.approx(100.0, abs=1e-6)
-
-
-def test_proximity_pct_is_level_independent():
-    """A constant dB offset on either vector (a level / RMS change) must NOT
-    move the proximity — timbre proximity is volume-independent by definition."""
-    ref = np.array([4.0, 3.0, 1.0, -1.0, -2.0, 0.0, 2.0, -5.0])
-    wet = np.array([2.0, 2.0, 0.0, -1.0, -1.0, 1.0, 1.0, -4.0])
-    base = _common.ltas_proximity_pct(ref, wet)
-    shifted = _common.ltas_proximity_pct(ref - 12.0, wet + 12.0)
-    assert shifted == pytest.approx(base, abs=1e-6)
-
-
-def test_proximity_pct_clamped_to_zero_for_opposite_shape():
-    ref = np.array([10.0, -10.0, 10.0, -10.0, 10.0, -10.0, 10.0, -10.0])
-    wet = -ref  # cosine -1 → clamped to 0
-    p = _common.ltas_proximity_pct(ref, wet)
-    assert 0.0 <= p <= 100.0
-    assert p == pytest.approx(0.0, abs=1e-6)
-
-
 # --- energy-weighted, full-band 1/3-octave spectral proximity (the real bar) -
 # The 8-band/80 Hz mean-subtracted cosine is blind in the sub-bass (a +20 dB
 # 63 Hz boom — the audible "som morto" — is invisible) and hypersensitive in
@@ -228,19 +203,6 @@ def test_trustworthy_band_mask_excludes_top_octave_when_collapsed():
     mask = _common.trustworthy_band_mask(band_db)
     assert mask[:6].all()           # 80..2560 Hz trustworthy
     assert not mask[6] and not mask[7]   # >= 5 kHz excluded
-
-
-def test_proximity_pct_band_mask_reflects_trustworthy_range():
-    """The dead top must NOT drag the number: a bright wet that matches the
-    trustworthy range scores high, even though its live top differs from the
-    ref's dead top. This is the '99% but sounds muffled' bug."""
-    ref = np.array([2.0, 5.0, 6.0, 3.0, 0.0, -4.0, -10.0, -30.0])
-    wet = np.array([2.0, 5.0, 6.0, 3.0, 0.0, -4.0, -6.0, -12.0])  # live top
-    mask = _common.trustworthy_band_mask(ref)
-    full = _common.ltas_proximity_pct(ref, wet)
-    limited = _common.ltas_proximity_pct(ref, wet, band_mask=mask)
-    assert limited > full
-    assert limited == pytest.approx(100.0, abs=0.5)
 
 
 def _sine(freq_hz: float, duration_s: float, amplitude: float = 0.5, sr: int = SR) -> np.ndarray:

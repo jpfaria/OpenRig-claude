@@ -187,50 +187,6 @@ def trustworthy_band_mask(band_db: Any, drop_db: float = DEAD_TOP_OCTAVE_DROP_DB
     return mask
 
 
-def ltas_proximity_pct(ref_ltas: Any, wet_ltas: Any, band_mask: Any = None) -> float:
-    """Level-independent timbre proximity of two per-band LTAS vectors, in [0, 100].
-
-    Proximity = how identically the tone *sounds*, independent of volume/level.
-    It is the cosine similarity of the **mean-subtracted** per-band LTAS vectors,
-    mapped to a percentage:
-
-        proximity_pct = 100 * max(0, dot(r, w) / (||r|| * ||w||))
-
-    where ``r`` / ``w`` are ref / wet with their per-band mean removed. The
-    mean-subtraction removes overall level by construction, so scaling either
-    signal (a pure dB offset across all bands) leaves the number unchanged —
-    volume never moves timbre proximity. 100 = identical envelope shape.
-
-    ``band_mask`` (optional boolean array) restricts the comparison to the
-    trustworthy bands — pass ``trustworthy_band_mask(ref)`` so a separated
-    stem's dead top octave cannot inflate (or deflate) the number. The mean is
-    re-centred over the kept bands, so the proximity reflects the reliable
-    range only.
-
-    Inputs may be raw band-energy dB (mean removed here) or already
-    mean-subtracted LTAS (mean-subtraction is then a no-op) — both are valid,
-    so eq_match's normalised LTAS and compare's section band_energy_db both
-    feed in directly.
-
-    A perfectly flat vector has no shape: two flat vectors are identical (100);
-    flat-vs-shaped has no shared direction (0).
-    """
-    r = np.asarray(ref_ltas, dtype=np.float64)
-    w = np.asarray(wet_ltas, dtype=np.float64)
-    if band_mask is not None:
-        m = np.asarray(band_mask, dtype=bool)
-        r = r[m]
-        w = w[m]
-    r = r - r.mean()
-    w = w - w.mean()
-    nr = float(np.linalg.norm(r))
-    nw = float(np.linalg.norm(w))
-    if nr < 1e-9 or nw < 1e-9:
-        return 100.0 if (nr < 1e-9 and nw < 1e-9) else 0.0
-    cos = float(np.dot(r, w) / (nr * nw))
-    return float(max(0.0, cos) * 100.0)
-
-
 def third_octave_ltas(
     signal: np.ndarray,
     sr: int,

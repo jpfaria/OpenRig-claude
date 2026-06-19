@@ -558,6 +558,40 @@ full mix, treat the fingerprint's centroid as a ceiling, look at the
 spectrogram of guitar-only sections, and ask the user for an isolated
 stem before committing.
 
+### ⛔ HARD RULE — no suppositions about real-world GEAR / tone / history
+
+This is the **transversal** version of the rule above, and it applies in
+**any** turn this skill is loaded — including a casual chat question with no
+build running ("how do you get the Green Day tone?", "what amp does X use?",
+"sem pedal de drive como faço?"). **Never state a claim about real-world
+gear, signal chains, amp/cab/pedal/pickup models, specs, prices, an artist's
+rig, an album's recording setup, or music history from training memory.**
+Those priors are exactly what produced the documented failure: confidently
+asserting "Green Day = cranked Marshall, zero pedal, Bill Lawrence L-500XL"
+— and being wrong (there was a Boss Blues Driver; the pickup is disputed;
+the tone is low-gain, not cranked).
+
+**Every such factual claim must be backed by ONE of:**
+1. a **measured number** from the analyzer (fingerprint / `proximity_pct` /
+   LTAS / spectrogram), or
+2. a **web source you fetched THIS turn** (`WebSearch` / `WebFetch`), with
+   the URL cited.
+
+If you have neither, you have two honest options — **never a third**:
+- **Verify first** — run `WebSearch` before asserting, then cite it; or
+- **Label it** explicitly: *"(não verificado — da memória, não chequei)"*
+  / "(unverified — from training memory)".
+
+For a **tone question**, the substance comes from a measured number or a
+cited source — your prior is never the basis. "It's the logical answer" /
+"everyone knows X uses Y" / "from what I remember" = the anti-pattern.
+
+**Red-flag self-check before sending ANY chat message stating a gear/tone/
+history fact:** "Can I cite a URL I fetched this turn, or a number I
+measured? If not — WebSearch now, or label it unverified, or cut it." A
+plugin hook (`no-suppositions-guard`) reinforces this on every gear/tone
+prompt, but the rule binds with or without the hook.
+
 ## Precondition (MCP path only) — the MCP server must be connected
 
 If the user picked the MCP path:
@@ -1104,6 +1138,15 @@ The skill **generates** the matched EQ with a deterministic script; you
 do not eyeball band moves. The preset MUST carry an
 `eq_eight_band_parametric` block (the parametric EQ, plan block 6) for
 this loop.
+
+> **Two stages, in order — they are complementary, not redundant:**
+> **(A) the coarse 8-band loop** below (the `new_gains` vector on the
+> `eq_eight_band_parametric` block) gets the broad shape close, driving
+> `proximity_pct` up toward the per-song floor; **(B) the exact correction
+> IR** (`correction_db` → min-phase FIR / `generic_ir`, see the Validation
+> Gate) then imposes the measured residual to nail the floor. Do A until
+> `within_floor` (or it plateaus), THEN add B. The 8-band block is
+> adjustable knobs; the IR is the precise finisher.
 
 > ⛔ **Setup BEFORE the first iteration — two preconditions, both
 > mandatory:**
