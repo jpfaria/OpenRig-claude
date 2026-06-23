@@ -41,6 +41,37 @@ number.** That is the whole job. You do ONLY this:
   would move the number"). Do not silently ship a dead-feeling preset, and
   do not chase a number that physically cannot move.
 
+## ⛔ The degraded-reference trap — when the number LIES (read before any eq_match)
+
+A separated stem from a **mix where the instrument is buried** (e.g. the
+guitar in a piano-driven song) is not a guitar spectrum — it is a low-mid
+fragment with the top octave stripped by the separator. **Measure the
+reference before trusting any match:**
+
+- **top octave** (~10 kHz) more than ~30 dB below the ~400 Hz body, AND/OR
+- **85 % of the energy rolled off below ~1 kHz** (spectral rolloff < ~1 kHz), AND/OR
+- a **low `self_floor_pct`** (< ~90 %).
+
+When any of these holds, the reference is **degraded**, and running the
+eq_match loop **inverts quality**: to "match" the dark, low-mid-heavy,
+dead-top stem it piles low-mid boost (+10…+15 dB) and kills the top — it
+DARKENS the tone toward the artifact. The proximity number goes UP while the
+sound goes DOWN. Measured on the real Clocks guitar (Moisés stem: 10 k at
+−101 dB, 85 % of energy below 630 Hz): the eq_match build measured **88 %**
+but its high end sat **−18 dB** below the body (boxy, "nothing like the
+song"); the gear-driven bright build measured only **64 %** but had a flat,
+guitar-like tilt — the **lower** number was the **right** tone.
+
+**Rule:** on a degraded reference, **do NOT run the aggressive eq_match
+darkening.** Build the **researched gear** (the amp IS the timbre) with a
+**musical, bright EQ** (flat ± a gentle air/presence shelf — never a low-mid
+pile), and hand it to the **user's ear** — this is the one case where the
+number is actively misleading and only the user playing can judge. Report
+the degraded reference plainly ("the stem is a top-dead, low-mid fragment —
+matching it would darken the tone; I built the researched rig bright instead,
+your ear decides"). A cleaner stem (or the full-mix guitar) is what would let
+the number lead again.
+
 Build a faithful tone for a real-world song/artist as a **named preset on
 a new slot in an existing chain's bank**. Default path drives the OpenRig
 MCP server (audible immediately on the live rig); an alternate path

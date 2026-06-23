@@ -1,9 +1,9 @@
 {
   "name": "openrig",
-  "description": "Control a running OpenRig rig from any AI client: build tones, tweak the chain, switch presets \u2014 driven through OpenRig's MCP server.",
-  "version": "0.5.1",
+  "description": "Control a running OpenRig rig from any AI client: build tones, tweak the chain, switch presets — driven through OpenRig's MCP server.",
+  "version": "0.5.2",
   "author": {
-    "name": "Jo\u00e3o Paulo"
+    "name": "João Paulo"
   },
   "homepage": "https://github.com/jpfaria/OpenRig-claude"
 }
