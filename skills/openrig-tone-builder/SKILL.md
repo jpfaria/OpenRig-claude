@@ -1046,7 +1046,7 @@ Steps:
 1.  dynamics/ <compressor_model_id>       enabled:true   intent: parallel-style clean compression (~20-40% mix for clean rhythm/lead)
 2.  filter  / <guitar_eq_model_id>        enabled:true   intent: start flat, tilt ±2 dB max
 3.  dynamics/ <gate_model_id>              enabled:true   intent: fast attack, release tuned to playing dynamics, threshold above noise floor
-4.  gain    / <gain_model_id>              enabled:<bool> intent: only if the song uses a boost/drive (recipe in blocks-reference.md per style)
+4.  gain    / <gain_model_id>              enabled:true   intent: the DRIVE STAGE (boost/OD/distortion/fuzz). Electric almost always has one; STACK 2-3 in series (one gain block PER pedal, researched order) when the rig calls for it. Skip ONLY for a genuinely clean/acoustic part. Recipe in blocks-reference.md per style
 5.  amp     / <amp_model_id>              enabled:true   intent: NAM amp for songs with a real amp model; recipe in blocks-reference.md
 6.  filter  / <parametric_eq_model_id>    enabled:true   intent: mimic real bass/mid/treble/presence shape — MUST land AFTER the amp/cab (post-distortion); verify the saved order, position counts disabled blocks (see Step 4 add_block warning + Step 6.3)
 7.  delay   / <delay_model_id>            enabled:<bool> intent: time from BPM math (recipe in blocks-reference.md per style)
@@ -1054,6 +1054,19 @@ Steps:
 9.  dynamics/ <limiter_model_id>          enabled:true   intent: safety limiter — threshold near the ceiling, idle on normal playing; NOT a brickwall the signal lives against (Step 7)
 10. gain    / <volume_model_id>            enabled:true   intent: per-preset output trim — gain-staged in Step 7 to peak ≈ -7 dBFS on the bundled DI (headroom for live dynamics), never slammed to -1
 ```
+
+> ⛔ **The drive stage (position 4) is first-class, not an afterthought — and it STACKS.**
+> An electric-guitar tone almost always includes at least one drive pedal
+> (boost / overdrive / distortion / fuzz); real players routinely run **two or
+> three at once** (e.g. clean boost → Tube Screamer → Big Muff, or OD → fuzz).
+> So position 4 is NOT a single optional slot: during gear research (Step 1)
+> you **MUST** determine the song's full drive stack and represent it as **one
+> `gain` block per pedal, in series, in the researched order**. Defaulting to
+> amp-only, or collapsing a known multi-pedal stack into one block, is a build
+> error — the drive stack is often the core of the tone, not the amp alone.
+> The ONLY electric exception is a genuinely clean part (then drop the drive
+> stage per the Clean/acoustic row below). "The amp crunch is enough" is a
+> rationalization unless research shows the part was truly played pedal-free.
 
 The **`intent:`** column is the recipe-class hint (what this block is *for*). The actual `MODEL_ID`s are picked in Step 2 (from `openrig://plugins` + recipes in `blocks-reference.md`); the actual param **paths, types, ranges, and enum options** come from `openrig://plugins/{id}/params` in **Step 2.6** — never from this template. Do NOT read names like "mix", "attack_ms", "threshold", "feedback" from this table and assume they are the schema paths for the chosen plugin; they are the *concepts* you'll set, and the actual path/type for each concept comes from Step 2.6 only.
 
@@ -1068,7 +1081,7 @@ Adjust per song style:
 
 All numeric *values* below are recipe-class targets (what you're aiming for); the actual param **paths** to set them via come from each block's Step 2.6 schema.
 
-- **Clean / acoustic**: drop the boost (skip block 4), drop the gate, switch to a clean amp, add a body IR for acoustic.
+- **Clean / acoustic**: drop the whole drive stage (skip block 4 — no boost/OD/distortion/fuzz), drop the gate, switch to a clean amp, add a body IR for acoustic. This is the one electric case where position 4 is empty.
 - **Funk / clean rhythm**: keep the compressor paralleled with a high wet-mix value. Lower amp gain.
 - **Lead solo**: bump the volume block's output to ~85-90% of its range, raise delay mix to ~12-25%, switch reverb to a hall, larger room size, higher mix.
 - **Delay-driven (Edge/Buckland/Mayer rhythm)**: time = dotted-eighth at the song BPM (`60000 / bpm * 1.5 / 2`), feedback ~25-35%, mix ~30-40% so the delay pattern is clearly audible.
