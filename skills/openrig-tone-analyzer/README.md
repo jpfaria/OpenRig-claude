@@ -30,6 +30,32 @@ next gains (`new_gains`) that move the render's normalised LTAS shape
 toward the reference, plus `total_gap_db`. The `openrig-tone-builder` Step
 6.3 loop applies the gains, re-renders, and repeats until the gap plateaus.
 
+`rebuild_preset.py` automates that whole loop **offline** for rebuilding a
+preset from a surviving reference, without the live rig: it drives
+`openrig-render --chain <flat-preset.yaml>` against the bundled DI and
+`eq_match.py` against the reference, sets the 8-band EQ to the absolute gains
+returned each pass, and repeats until `within_floor` (or a plateau / cap),
+then gain-normalises the EQ and runs a headroom pass to land the DI peak
+~ -7 dBFS. The render binary, DI, and plugins root are passed as arguments
+(they live in the OpenRig app / OpenRig-plugins), so the script stays
+portable:
+
+```bash
+.venv/bin/python scripts/rebuild_preset.py \
+  --ref   /path/to/eval/<song>/refs/rhythm.wav \
+  --base  /path/to/eval/<song>/presets/rhythm-base.yaml \
+  --out-dir /path/to/eval/<song> --role rhythm \
+  --render-bin /path/to/openrig-render \
+  --di /path/to/OpenRig/assets/audio/input.wav \
+  --plugins-root /path/to/OpenRig-plugins/plugins/source \
+  --dyld-lib /path/to/nam/out/lib   # macOS only, for libnam_wrapper.dylib
+```
+
+The pure layer (grid setup, absolute-gain application, headroom
+normalisation, loop control) is unit-tested in
+`tests/test_rebuild_preset.py` with the render/eq_match calls injected, so
+the loop logic is verified without the Rust binary.
+
 ## Schema
 
 - `fingerprint.json` and `diff.json` — see
