@@ -199,10 +199,14 @@ def main(argv=None) -> int:
     ap.add_argument("--base", required=True, help="base flat preset YAML (gear + EQ block)")
     ap.add_argument("--out-dir", required=True, help="evaluation dir (renders/, diffs/, presets/)")
     ap.add_argument("--role", required=True, help="rhythm/lead/solo/clean")
-    ap.add_argument("--render-bin", required=True, help="path to openrig-render")
+    ap.add_argument("--render-bin", required=True, help="path to the installed openrig-render")
     ap.add_argument("--di", required=True, help="bundled DI WAV (assets/audio/input.wav)")
-    ap.add_argument("--plugins-root", required=True, help="OpenRig-plugins plugins/source")
-    ap.add_argument("--dyld-lib", default="", help="extra DYLD_FALLBACK_LIBRARY_PATH (macOS NAM dylib)")
+    ap.add_argument("--plugins-root", default="",
+                    help="override plugins root (OPENRIG_PLUGINS_ROOT); omit when using "
+                         "the installed openrig-render, which auto-resolves the bundled plugins")
+    ap.add_argument("--dyld-lib", default="",
+                    help="extra DYLD_FALLBACK_LIBRARY_PATH (dev-tree macOS NAM dylib only; "
+                         "the installed binary resolves it via the bundle Frameworks rpath)")
     ap.add_argument("--max-iters", type=int, default=6)
     args = ap.parse_args(argv)
 
@@ -217,7 +221,8 @@ def main(argv=None) -> int:
         d.mkdir(parents=True, exist_ok=True)
 
     env = dict(os.environ)
-    env["OPENRIG_PLUGINS_ROOT"] = args.plugins_root
+    if args.plugins_root:
+        env["OPENRIG_PLUGINS_ROOT"] = args.plugins_root
     if args.dyld_lib:
         env["DYLD_FALLBACK_LIBRARY_PATH"] = args.dyld_lib + ":" + env.get("DYLD_FALLBACK_LIBRARY_PATH", "")
 

@@ -36,19 +36,29 @@ preset from a surviving reference, without the live rig: it drives
 `eq_match.py` against the reference, sets the 8-band EQ to the absolute gains
 returned each pass, and repeats until `within_floor` (or a plateau / cap),
 then gain-normalises the EQ and runs a headroom pass to land the DI peak
-~ -7 dBFS. The render binary, DI, and plugins root are passed as arguments
-(they live in the OpenRig app / OpenRig-plugins), so the script stays
-portable:
+~ -7 dBFS. It drives the **installed** `openrig-render` (the headless
+renderer OpenRig ships next to the GUI, issue #741) — same engine as the
+live rig, no `--mcp`, no live runtime. Point `--render-bin` and `--di` at
+the install; the binary auto-resolves the bundled plugins and (on macOS)
+`libnam_wrapper.dylib` via its bundle, so `--plugins-root`/`--dyld-lib`
+are needed only in a dev tree:
 
 ```bash
+# Installed app (macOS) — minimal invocation:
 .venv/bin/python scripts/rebuild_preset.py \
   --ref   /path/to/eval/<song>/refs/rhythm.wav \
   --base  /path/to/eval/<song>/presets/rhythm-base.yaml \
   --out-dir /path/to/eval/<song> --role rhythm \
-  --render-bin /path/to/openrig-render \
-  --di /path/to/OpenRig/assets/audio/input.wav \
-  --plugins-root /path/to/OpenRig-plugins/plugins/source \
-  --dyld-lib /path/to/nam/out/lib   # macOS only, for libnam_wrapper.dylib
+  --render-bin /Applications/OpenRig.app/Contents/MacOS/openrig-render \
+  --di        /Applications/OpenRig.app/Contents/Resources/assets/audio/input.wav
+# Linux install: --render-bin /usr/bin/openrig-render
+#                --di         /usr/share/openrig/assets/audio/input.wav
+
+# Dev tree (uncommitted plugins / dylib not yet in a bundle) — add overrides:
+#   --render-bin target/release/openrig-render \
+#   --di /path/to/OpenRig/assets/audio/input.wav \
+#   --plugins-root /path/to/OpenRig-plugins/plugins/source \
+#   --dyld-lib /path/to/nam/out/lib   # macOS dev only, for libnam_wrapper.dylib
 ```
 
 The pure layer (grid setup, absolute-gain application, headroom

@@ -204,11 +204,12 @@ reference provided, this preset is a research-only guess; I cannot
 validate it" — so the user can decide whether to provide one or accept
 the limitation. Silent skipping = failure of the skill.
 
-The DI path is `<openrig-source-root>/assets/audio/input.wav`. Not
-`assets/sound/`, not `~/Music/`, not a fresh user-supplied DI. This
-one file. You never ask the user for a DI; only the *wet reference*
-comes from them. If it is missing from the OpenRig repo, that is a bug
-in the repo — stop and tell the user, do not improvise.
+The DI is the bundled `<openrig-di>`, resolved in **Step 0b** from the
+install's data root (`assets/audio/input.wav`). Not `assets/sound/`, not
+`~/Music/`, not a fresh user-supplied DI. This one file. You never ask
+the user for a DI; only the *wet reference* comes from them. If it is
+missing from the install, that is a packaging bug — stop and tell the
+user, do not improvise.
 
 ### Level is NOT timbre — never match the reference's RMS
 
@@ -228,8 +229,11 @@ Step 7: Step 6 never touches level, Step 7 sets the headroom.)
 ## Step −1 — Ask the user: MCP live or YAML file only?
 
 Before touching anything, ask **once** which persistence path the user
-wants. Both paths are valid; the right choice depends on whether
-OpenRig is running:
+wants. This choice is about **where the preset is stored** (live bank vs
+YAML file) — **not** about whether the render+compare validation gate
+runs. The gate runs on **both** paths via the installed `openrig-render`
+(Step 0b); it never requires `--mcp`. Both paths are valid; the right
+choice depends on whether OpenRig is running:
 
 > "For this preset, I'll go: **(a) via MCP on the live rig** (new slot
 > in the bank, audible immediately — requires OpenRig with `--mcp`), or
@@ -427,6 +431,68 @@ row whenever you finish (or re-evaluate) an evaluation. Columns:
 `<song-slug>`, `<song>`, `<artist>`, best `match_score`, last date,
 status. The index is a navigation aid; do not duplicate `eval.md`
 content in it.
+
+## Step 0b — Resolve the installed render engine (`openrig-render` + bundled DI) — BEFORE Step 0
+
+The render gate (Step 6, Step 8) runs the **installed** `openrig-render`
+binary — the headless offline renderer OpenRig ships next to the GUI
+(issue #741). It is the **same** `engine::offline::render_chain` the live
+rig uses, so an offline render is byte-identical to what the rig would
+emit. It needs **no live runtime and no MCP**: it reads a chain YAML,
+applies it to a DI WAV, writes the wet WAV. This is why **both** the MCP
+path and the file-only path render+compare the same way — the MCP/file
+choice is about **persistence only** (live bank vs YAML file), never
+about whether the validation gate can run. Resolve the binary **once, up
+front** (fail fast if OpenRig isn't installed) and cache the path:
+
+1. `$OPENRIG_RENDER_BIN` if set — explicit override, wins.
+2. `command -v openrig-render` — on `PATH` (the Linux `.deb`/`.tar.gz`
+   install puts it at `/usr/bin/openrig-render`).
+3. Per-OS install location:
+   - **macOS:** `/Applications/OpenRig.app/Contents/MacOS/openrig-render`
+     (also check `$HOME/Applications/OpenRig.app/Contents/MacOS/openrig-render`).
+   - **Linux:** `/usr/bin/openrig-render`.
+   - **Windows:** `openrig-render.exe` in the OpenRig install dir.
+4. Dev tree only (contributor working in the source repo):
+   `target/release/openrig-render`.
+
+If none resolves, **STOP and tell the user to install/update OpenRig** —
+do **not** silently skip the render gate (it is mandatory before
+"done"). Treat the resolved path as `<openrig-render-bin>` everywhere
+below.
+
+**Bundled DI.** `openrig-render` resolves its data root **relative to
+its own executable** (`detect_data_root()`): macOS →
+`OpenRig.app/Contents/Resources`, Linux → `/usr/share/openrig`, dev →
+the source tree. The canonical DI ships under that root at
+`assets/audio/input.wav`. Resolve `<openrig-di>` the same per-OS way (or
+read `openrig://paths.data_root` + `/assets/audio/input.wav` when MCP is
+up). You **never** ask the user for a DI.
+
+**Plugins resolve automatically.** Because the binary detects its data
+root relative to itself, the **bundled** plugins (the same install)
+are found with **no flag and no env var**. Set
+`OPENRIG_PLUGINS_ROOT=<plugins dir>` (and retry) **only** if a render
+fails because a block could not be built (exit `1`) — e.g. a NAM/IR/LV2
+plugin missing from the bundled set. On installed macOS the binary finds
+`libnam_wrapper.dylib` through the bundle's `Frameworks` rpath, so **no
+`DYLD_*` env is needed** — that was a dev-tree-only crutch.
+
+**Invocation contract** (these are the ONLY flags `openrig-render`
+accepts — there is **no `--preset`**, **no `--plugins-root`**):
+
+```
+<openrig-render-bin> --chain <preset.yaml> --input <openrig-di> --output <wet.wav>
+  [--start S] [--end E] [--sample-rate 48000] [--block-size 256]
+  [--bit-depth 16|24|32] [--tail-ms 2000]
+```
+
+`--chain` takes a **flat `blocks:` list** (no I/O blocks) — the exact
+shape of a saved preset file, so the YAML the skill writes (file-only
+path) or the saved-preset YAML on disk (MCP path) is fed directly. Exit
+codes: `0` ok; `1` render failed (incl. **any block that could not
+build** — the CLI fails loudly, unlike the GUI's bypass-and-continue);
+`2` argument error.
 
 ## Step 0 — Fingerprint the reference audio FIRST (when WAVs are provided)
 
@@ -1180,13 +1246,21 @@ two surfaces:
 > You have no ears; the **user's ear is the only override, and only when
 > the user says it's bad**. Run this BEFORE declaring done.
 
-**6.0 — Render the bundled DI through the just-saved preset.** Write
+**6.0 — Render the bundled DI through the just-saved preset.** Use the
+installed `<openrig-render-bin>` (Step 0b) and feed the saved preset's
+**YAML on disk** via `--chain` (there is no `--preset` flag). Write
 directly to the persistent eval dir from **Step 0a**, NOT `/tmp/`:
-`openrig render --preset "<Song> — <Artist> (<role>)" --input
-<openrig-source-root>/assets/audio/input.wav --output
+`<openrig-render-bin> --chain
+<openrig-user-data-root>/presets/"<Song> — <Artist> (<role>)".yaml
+--input <openrig-di> --output
 <openrig-evaluations-root>/<song-slug>/renders/<role>-v<N>.wav`. `<N>`
-starts at `1`, or `last_existing_N + 1` when reusing a dir. You never
-ask for a DI; only the wet reference comes from the user.
+starts at `1`, or `last_existing_N + 1` when reusing a dir. The exact
+same command works on the **file-only** path — `--chain` simply points
+at the YAML you wrote there. You never ask for a DI (`<openrig-di>` is
+the bundled file from Step 0b); only the wet reference comes from the
+user. A non-zero exit is fatal: exit `1` means a block could not build
+(check the model id / params, or set `OPENRIG_PLUGINS_ROOT` per Step 0b),
+exit `2` an argument error — do not proceed as if a render exists.
 
 **6.1 — Compute the faithful number.** Compare the render against the
 **persistent** isolated-guitar `refs/<role>.wav` (Step 0a — never the
@@ -1423,12 +1497,15 @@ conventions, and -18 on the DI would be genuinely quiet. The law is
 **headroom-on-the-DI**: peak ≈ -7 dBFS, limiter idle. Neither slam the DI
 to -1 (no headroom → clips live) nor drop it to -18 (quiet).
 
-**File-only path:** without the runtime there is no render to measure, so
-the headroom pass is impossible. Set the EQ `output_db` / trim to a
-conservative, headroom-biased recipe default (do NOT default toward the
-ceiling) and flag explicitly in the chat reply: "output level unverified
-— file-only build; on first MCP session run the Step 7 headroom pass to
-land the DI peak at ≈ -7 dBFS with the limiter idle".
+**File-only path:** the headroom pass runs here too — `<openrig-render-bin>`
+(Step 0b) renders the YAML you wrote against the bundled DI with no live
+runtime, so you measure the DI peak and gain-stage it to ≈ -7 dBFS
+exactly as on the MCP path. The only thing the file-only path defers is
+pushing the preset into the live bank. (If — and only if —
+`openrig-render` is genuinely not installed, fall back to a conservative,
+headroom-biased recipe default, do NOT default toward the ceiling, and
+flag "output level unverified — render engine not installed; install
+OpenRig and re-run Step 7 to land the DI peak at ≈ -7 dBFS".)
 
 ## Step 8 — Re-evaluation of an existing preset
 
@@ -1442,10 +1519,11 @@ persistence laid down by Step 0a, Step 0(4), and Step 6.
 
 Preconditions:
 
-1. **MCP path only.** `openrig-render` requires the runtime; the
-   file-only workflow has no way to produce a fresh render. If the
-   user asks for re-eval on the file-only path, tell them to start
-   OpenRig with `--mcp` and offer to switch.
+1. **Render engine installed.** Re-eval runs on **either** path — the
+   installed `<openrig-render-bin>` (Step 0b) produces the fresh render
+   offline, no `--mcp` required. The only precondition is that OpenRig
+   is installed; if `openrig-render` does not resolve, STOP and tell the
+   user to install/update OpenRig.
 2. `<openrig-evaluations-root>/<song-slug>/refs/<role>.wav` exists —
    otherwise there's nothing to compare against. If missing, this
    evaluation predates Step 0a; ask the user for the original ref WAV
@@ -1462,14 +1540,12 @@ Flow:
    (date suffix instead of a numeric bump — re-evals are not part of
    the build's iteration sequence and shouldn't shift `<N>`).
 2. **Render the current preset YAML through the bundled DI**:
-   `openrig render --chain <preset-path> --input
-   <openrig-source-root>/assets/audio/input.wav --output
+   `<openrig-render-bin> --chain <preset-path> --input <openrig-di>
+   --output
    <openrig-evaluations-root>/<song-slug>/renders/<role>-vREEVAL-<YYYY-MM-DD>.wav`.
-   Use `--chain <yaml-path>` (or whatever the equivalent
-   load-from-file flag is) to render the YAML directly without
-   needing to push it into a slot. The DI path stays the canonical
-   bundled file from `<openrig-source-root>/assets/audio/input.wav`
-   — same as Step 6, same dynamic-range guarantees.
+   `--chain <yaml-path>` renders the YAML directly without needing to
+   push it into a slot. `<openrig-di>` is the canonical bundled DI
+   resolved in Step 0b — same as Step 6, same dynamic-range guarantees.
 3. **Compare against the persistent reference**:
    `.venv/bin/python scripts/compare.py
    <openrig-evaluations-root>/<song-slug>/refs/<role>.wav
@@ -1577,10 +1653,12 @@ read-render-compare over persistent artifacts.
       post-limiter chain master), the limiter is **idle on normal
       playing** (rare-peak safety, not a brickwall), a confirmation
       render proved it, and the chat reply reports the measured DI peak.
-      (MCP path; on file-only you flagged "output level unverified".)
-- [ ] The render command pointed `--input` at the bundled
-      `<openrig-source-root>/assets/audio/input.wav` — NOT a
-      user-supplied DI path, NOT a random clean WAV.
+      (Runs on both paths via the installed `<openrig-render-bin>`; only
+      if it is not installed do you flag "output level unverified".)
+- [ ] The render command used `<openrig-render-bin> --chain <yaml>` and
+      pointed `--input` at the bundled `<openrig-di>` (Step 0b) — NOT a
+      user-supplied DI path, NOT a random clean WAV, NOT an `openrig
+      render` subcommand.
 - [ ] You resolved `<openrig-user-data-root>` for your OS at the start
       of **Step 0a** (macOS → `~/Library/Application Support/OpenRig/`,
       Linux → `${XDG_CONFIG_HOME:-~/.config}/OpenRig/`, Windows →
@@ -1741,8 +1819,8 @@ read-render-compare over persistent artifacts.
 - Targeting -18 dBFS (or any K-system / broadcast alignment level) for
   the preset's output. There is no -18 dBFS standard in this skill —
   the law is headroom-on-the-DI (peak ≈ -7 dBFS, limiter idle; Step 7).
-- Asking the user for a DI WAV file. **You don't.** The DI is bundled
-  at `<openrig-source-root>/assets/audio/input.wav`. Only the *wet
+- Asking the user for a DI WAV file. **You don't.** The DI is the
+  bundled `<openrig-di>`, resolved in Step 0b. Only the *wet
   reference stem* comes from the user.
 - Calling `add_block` with a `MODEL_ID` you have not cross-checked
   against `openrig://plugins` in **Step 2.5**. The runtime hard-matches
@@ -1855,8 +1933,8 @@ read-render-compare over persistent artifacts.
 | "The render is clipping, so I'll pull the chain master volume down to fix it" | The chain master is **post-limiter** — it drops the meter but the limiter is already pumping upstream of it. You cannot fix clipping downstream of the thing clipping. Create headroom BEFORE the limiter: gain-normalize the EQ (Step 6.3) and lower the EQ `output_db` / output-trim / amp output until the limiter sits idle. |
 | "The limiter is brick-wall protection, so I can run the signal hot against it" | The limiter is a rare-peak safety, not a leveler the signal lives against. If it gain-reduces on ordinary notes, the pre-limiter gain is too hot — pull it down (Step 7 step 3); never lower the threshold to "tame" a too-hot signal. Limiter idle on normal playing is the success signal. |
 | "The previous version of this preset worked without rendering, so I can skip this time" | Whoever told you that lied. **Every preset built without render+compare in this skill's history has been thrown away by the user.** Clocks v1 is the canonical example. No exceptions. |
-| "There's no `openrig render` available, I'll skip" | If `openrig render` is genuinely missing from PATH, STOP and tell the user — do not silently skip the gate. The CLI ships with OpenRig; check `which openrig` and `openrig --help` for the `render` subcommand. |
-| "The user didn't give me a DI, I can't render" | The user **never** gives you a DI. The canonical DI ships at `<openrig-source-root>/assets/audio/input.wav`. Reading the skill for the path is on you. |
+| "There's no render binary available, I'll skip" | The renderer is the standalone **`openrig-render`** binary (NOT an `openrig render` subcommand), shipped with OpenRig and resolved in **Step 0b** (`$OPENRIG_RENDER_BIN` → `PATH` → per-OS install path → dev `target/release`). If it genuinely does not resolve, STOP and tell the user to install/update OpenRig — do not silently skip the gate. |
+| "The user didn't give me a DI, I can't render" | The user **never** gives you a DI. The canonical DI is `<openrig-di>`, resolved in **Step 0b** from the install's data root (`assets/audio/input.wav`). Reading the skill for the path is on you. |
 | "I'll research first to know what to look for, then fingerprint" | Wrong order. Research without the fingerprint is theater — you bias toward what "sounds right on paper". Step 0 (fingerprint) comes before Step 1 (research). |
 | "The user gave me WAVs but I already know the song, fingerprint is redundant" | The WAVs are the user's reference take, not the song you remember. Era, mix, performance and the user's playing all shift the fingerprint. Run Step 0. |
 | "I'll fingerprint just one stem and reuse it for the other role" | Rhythm and lead have different gain stages, different time effects, different EQs. Fingerprint **each** WAV — that's what produces the role-specific presets the skill promises. |
@@ -1948,8 +2026,19 @@ If the user picked the file-only path in Step −1:
    file. The in-memory rig was not touched." *(render in the user's
    language at runtime — this English template documents the
    structure, not the literal words to ship)*
-5. Skip the render+compare loop unless the user explicitly opts in
-   later (would require switching to the MCP path for the render).
+5. **Run the full render+compare+auto-EQ gate (Step 6) and the headroom
+   pass (Step 7) — offline, right here.** The installed
+   `<openrig-render-bin>` (Step 0b) renders the YAML you wrote in step 3
+   directly (`--chain <that YAML> --input <openrig-di> --output …`), so
+   the file-only path drives the **same faithful number** to the
+   per-song floor as the MCP path — there is no "switch to MCP to
+   render". Iterate exactly as Step 6.3 (apply the matched gains in the
+   YAML, re-render, re-`eq_match`), then Step 7. The render doubles as a
+   build check: a wrong model id or param path makes the block fail to
+   build and `openrig-render` exits `1` (the CLI does not bypass) —
+   treat that as "fix the YAML", not "ship anyway". (Only if
+   `openrig-render` is genuinely not installed do you skip the gate —
+   then flag it per Step 6.5 / Step 7 and stop.)
 6. **Persistent evaluation dir on this path.** Step 0a still applies:
    resolve `<openrig-user-data-root>` for your OS (same per-OS table
    as Step 0a), compute `<song-slug>`, create
@@ -1958,13 +2047,15 @@ If the user picked the file-only path in Step −1:
    fingerprints into `fingerprints/ref-<role>.json`, and snapshot the
    YAML you write in step 3 into `presets/<role>-v1.yaml` (and
    `presets/<role>-final.yaml` if the user accepts it as-is). The
-   `renders/` and `diffs/` subdirs stay empty until the user later
-   switches to the MCP path — re-evaluation via **Step 8** is
-   unavailable on the file-only path because `openrig-render`
-   requires the live runtime. Initialise `eval.md` with `Status:
-   iterating` and a methodology note saying "file-only build, no
-   render+compare evidence — score columns will populate on first
-   MCP re-eval".
+   `renders/` and `diffs/` subdirs are populated by the step-5 offline
+   render+compare loop, and re-evaluation via **Step 8** works on this
+   path (it uses the same `<openrig-render-bin>`). Initialise `eval.md`
+   with `Status: iterating` and the real per-iteration `proximity_pct`
+   vs floor — full render+compare evidence, no "MCP re-eval pending"
+   caveat. (If — and only if — `openrig-render` is not installed, fall
+   back to `Status: iterating` with the methodology note "no render
+   engine installed — score columns populate once OpenRig is
+   installed".)
 
 ## Anti-patterns (all paths)
 
