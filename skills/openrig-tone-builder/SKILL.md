@@ -49,21 +49,32 @@ Build EXACTLY this way, every tone, the same. Improvising is where it breaks.
    `ltas_norm_db` + `reliable_mask` + `reliable_range_hz` + `top_octave_dead` +
    `self_floor_pct`. **The fingerprint is the validator — not the user's ear.**
    The user's ear only enters when THEY volunteer a complaint; never fish for it.
-2. **Research the gear** (cited, `tonedb.co` first): guitar, **drive stage**, amp,
-   cab, fx. Never from memory.
-   ⛔ **Account for the GAIN — "no stomp box on the record" is NOT "amp-only."**
-   The record's saturation usually came from a CRANKED or MODDED amp (e.g. Green
-   Day's "Dookie Mod" cascading-gain Plexi; two modded Super Leads blended), but
-   our NAM captures are usually STOCK / lower-gain amps. A stock capture of a hot
-   amp is **under-gained** — it will not reach the reference. So whenever the part
-   has real gain you MUST replace the missing gain: add a **drive pedal**
-   (boost / OD / distortion — the standard way to replicate a modded amp, e.g. the
-   MXR Dookie Drive) and/or pick a hotter capture. Players also routinely **stack
-   2–3 drives**. Verify by the number: if the flat amp plateaus below the floor and
-   the reference is clearly more saturated, the gain is MISSING → add drive. Skip
-   the drive ONLY for a genuinely CLEAN part (clean research AND a clean spectrum).
-   **Defaulting to amp-only on a gain tone is the error that gets the whole batch
-   thrown away — never do it.**
+2. **Research the gear EXHAUSTIVELY** (cited, `tonedb.co` first, THEN multiple
+   sources — interviews, rig rundowns, gear DBs, forums). Make a real effort to
+   discover the artist's FULL signal chain for THIS song — guitar + pickups, and
+   **EVERY pedal** (boost / OD / distortion / fuzz, compressor, wah, modulation,
+   delay, reverb), amp(s), cab(s), mic, and any studio technique. Do NOT stop at
+   "the amp" — keep digging and cross-checking sources until the rig is complete,
+   and cite them. A shallow "amp + done" search is exactly how pedals get missed
+   and the tone comes out wrong. Never from memory.
+   ⛔ **Reproduce the COMPLETE researched rig — omit NO element.** Every block the
+   research shows is part of the chain: drive(s), compressor, amp, cab, modulation
+   (chorus/phaser/tremolo), delay, reverb. **Dropping ANY of them** — because it
+   "feels minor", "wasn't a stomp box", or "the number didn't ask for it" — is the
+   error that gets the whole batch thrown away. Gain was only ONE instance. Two
+   traps that make you omit:
+   - **Gain:** "no stomp box on the record" is NOT "amp-only." The saturation was
+     often a CRANKED / MODDED amp (e.g. Green Day's Dookie-Mod Plexi), but our NAM
+     captures are STOCK / lower-gain → under-gained. Replace the missing gain with a
+     **drive pedal** (boost/OD/distortion) and/or a hotter capture; players stack
+     2–3 drives.
+   - **Time/feel:** chorus, delay, reverb, compression the research lists ARE part
+     of the tone — add them even though **they barely move the LTAS number** (they
+     are heard, not measured). The validator confirms timbre; it will NEVER tell
+     you an element is missing.
+   The number cannot catch a missing element — so before writing the preset,
+   re-walk the research **element by element** and confirm each is in the chain.
+   Omit an element ONLY when research shows it genuinely absent.
 3. **Build the chain YAML** yourself. The chain is
    `drive(s) → amp → cab → EQ (→ time-FX)`.
    ⛔ **Cab is mandatory when the amp capture is DIRECT.** Most NAM amp captures
