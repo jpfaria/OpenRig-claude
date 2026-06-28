@@ -49,9 +49,23 @@ Build EXACTLY this way, every tone, the same. Improvising is where it breaks.
    `ltas_norm_db` + `reliable_mask` + `reliable_range_hz` + `top_octave_dead` +
    `self_floor_pct`. **The fingerprint is the validator — not the user's ear.**
    The user's ear only enters when THEY volunteer a complaint; never fish for it.
-2. **Research the gear** (cited, `tonedb.co` first): guitar, **drive stack**, amp,
+2. **Research the gear** (cited, `tonedb.co` first): guitar, **drive stage**, amp,
    cab, fx. Never from memory.
-3. **Build the chain YAML** yourself.
+   ⛔ **Account for the GAIN — "no stomp box on the record" is NOT "amp-only."**
+   The record's saturation usually came from a CRANKED or MODDED amp (e.g. Green
+   Day's "Dookie Mod" cascading-gain Plexi; two modded Super Leads blended), but
+   our NAM captures are usually STOCK / lower-gain amps. A stock capture of a hot
+   amp is **under-gained** — it will not reach the reference. So whenever the part
+   has real gain you MUST replace the missing gain: add a **drive pedal**
+   (boost / OD / distortion — the standard way to replicate a modded amp, e.g. the
+   MXR Dookie Drive) and/or pick a hotter capture. Players also routinely **stack
+   2–3 drives**. Verify by the number: if the flat amp plateaus below the floor and
+   the reference is clearly more saturated, the gain is MISSING → add drive. Skip
+   the drive ONLY for a genuinely CLEAN part (clean research AND a clean spectrum).
+   **Defaulting to amp-only on a gain tone is the error that gets the whole batch
+   thrown away — never do it.**
+3. **Build the chain YAML** yourself. The chain is
+   `drive(s) → amp → cab → EQ (→ time-FX)`.
    ⛔ **Cab is mandatory when the amp capture is DIRECT.** Most NAM amp captures
    (`type: amp`, not full-rig) are head-only. A head with no cab renders a top
    that is nearly flat to 10 kHz = **fizz = "toy sound."** Detect it: render and
@@ -70,6 +84,9 @@ Build EXACTLY this way, every tone, the same. Improvising is where it breaks.
    dead-top and out-of-range bands stay **0**. NEVER gut presence to chase a dead
    top, NEVER pile low-mid to chase a degraded body (both read higher but sound
    worse). Headroom: set EQ `output_db` so the DI peaks ≈ −7 dBFS.
+   ⛔ **NO brickwall limiter, NO volume block.** The chain ends at the EQ (plus any
+   time-FX). `limiter_brickwall` and a `volume` block color/squash the tone and are
+   NOT wanted — level/headroom is the EQ `output_db` alone.
 6. **Gear-wrong rule.** If proximity **plateaus well below the floor** across cab
    and amp options, the GEAR is wrong (or the reference is degraded) — try a
    different amp/cab, do not crank EQ. The validator preferring a different amp
