@@ -56,7 +56,10 @@ Build EXACTLY this way, every tone, the same. Improvising is where it breaks.
    delay, reverb), amp(s), cab(s), mic, and any studio technique. Do NOT stop at
    "the amp" — keep digging and cross-checking sources until the rig is complete,
    and cite them. A shallow "amp + done" search is exactly how pedals get missed
-   and the tone comes out wrong. Never from memory.
+   and the tone comes out wrong. Never from memory. **This research is what FEEDS
+   the Step 3 candidate lists (Rule A): every amp/drive you later search must
+   trace to a source HERE — a thin candidate list is fixed by digging deeper, not
+   by padding Step 3 with unrelated gear.**
    ⛔ **Reproduce the COMPLETE researched rig — omit NO element.** Every block the
    research shows is part of the chain: drive(s), compressor, amp, cab, modulation
    (chorus/phaser/tremolo), delay, reverb. **Dropping ANY of them** — because it
@@ -75,8 +78,31 @@ Build EXACTLY this way, every tone, the same. Improvising is where it breaks.
    The number cannot catch a missing element — so before writing the preset,
    re-walk the research **element by element** and confirm each is in the chain.
    Omit an element ONLY when research shows it genuinely absent.
+   ⛔ **Each block's params are sourced, derivable, or flagged `unverified` (Rule B).**
+   Follow the source: **documented** (rig rundown / interview) → use the values;
+   **derivable** (delay time = tempo math from the song BPM) → compute them; **not
+   documented** (e.g. a compressor's exact knobs) → set a sensible default, mark
+   that block `provenance: unverified` in the base-chain YAML, AND tell the user —
+   NEVER present a default as if it were sourced. Tag every FIXED block
+   `provenance: sourced | derived | unverified` (absent ⇒ `unverified`); the
+   build_preset report surfaces them under `param_provenance` + an `unverified`
+   list for you to relay. Params the proximity number cannot validate (comp / mod /
+   delay / reverb feel) are set from source/default and are **never** optimized by
+   the number.
 3. **Build the chain YAML** yourself. The chain is
    `drive(s) → amp → cab → EQ (→ time-FX)`.
+   ⛔ **Candidates come from the RESEARCH — never arbitrary curation (Rule A).**
+   Each SEARCH slot's `candidates:` are derived ONLY from the gear Step 2 named,
+   in priority: **(1)** the EXACT researched capture if it exists in the catalog;
+   **(2)** else documented close stand-ins — same brand / family / circuit, each
+   justified by research (e.g. "1959SLP not captured → other Plexi / Super-Lead
+   captures"); **(3)** for a cranked / MODDED amp with no modded capture: the stock
+   researched amp capture PLUS a drive whose CHARACTER matches the mod (e.g. a
+   Marshall-in-a-box / hot OD for a Marshall Dookie-Mod) — drive candidates chosen
+   to match the mod, not random pedals. The validator only PICKS among
+   research-derived candidates; it **NEVER** licenses throwing unrelated gear into
+   the search "to see what scores". Thin research → widen the RESEARCH (Step 2),
+   not the candidate list with guesses.
    ⛔ **Cab is mandatory when the amp capture is DIRECT.** Most NAM amp captures
    (`type: amp`, not full-rig) are head-only. A head with no cab renders a top
    that is nearly flat to 10 kHz = **fizz = "toy sound."** Detect it: render and
@@ -1892,6 +1918,18 @@ read-render-compare over persistent artifacts.
   against `openrig://plugins` in **Step 2.5**. The runtime hard-matches
   IDs; an absent capture either crashes the call or silently selects
   nothing, and the user has no way to know you guessed.
+- **Throwing an unrelated amp / pedal into the candidate search "to see
+  what scores".** The SEARCH `candidates:` are research-derived ONLY (Rule A,
+  Step 3): the exact researched capture, documented close stand-ins (same
+  brand / family / circuit), or — for a cranked / modded amp — the stock
+  capture plus a drive whose character matches the mod. The validator PICKS
+  among researched candidates; it never blesses random gear. Thin research →
+  widen the RESEARCH (Step 2), not the candidate list with guesses.
+- **Presenting a guessed FX knob (comp / mod / delay / reverb) as if it were
+  researched.** If a param isn't documented or derivable, it's a default —
+  mark the block `provenance: unverified`, surface it in the build_preset
+  report's `unverified` list, and tell the user (Rule B). A default dressed up
+  as sourced is the failure; the proximity number never sets these feel params.
 - Silently substituting a missing capture for "the closest installed"
   amp/cab instead of proposing `openrig:openrig-tone3000-fetch` as
   the primary path in **Step 2.5**. Substitution is a last-resort
@@ -2006,6 +2044,8 @@ read-render-compare over persistent artifacts.
 | "I'll fingerprint just one stem and reuse it for the other role" | Rhythm and lead have different gain stages, different time effects, different EQs. Fingerprint **each** WAV — that's what produces the role-specific presets the skill promises. |
 | "`tone3000-fetch` is heavy (issue → PR → qa_audit gate), I'll just substitute" | Cost is the user's decision, not yours. **Step 2.5 leads with `tone3000-fetch` as the primary proposal — substitution is a fallback, not a peer.** Propose import; if the user vetoes that path explicitly, then ask which specific substitute. Deciding for them = deciding that the tone doesn't matter — but they asked for THE tone, not A tone. |
 | "The closest already-installed capture is 'close enough'" | "Close enough" is the user's judgment, not yours. Ask in **Step 2.5** — and only after the `tone3000-fetch` import path is closed. Step 5 provenance documents authorized substitutions; it does not retroactively authorize yours. |
+| "I'll toss a few extra amps/pedals into the candidate search to see what scores best" | Rule A: candidates are research-derived ONLY — the exact capture, documented close stand-ins (same brand/family/circuit), or, for a cranked/modded amp, the stock capture + a mod-matched drive (e.g. a Marshall-in-a-box for a Dookie-Mod Plexi). The validator picks among researched gear; it never blesses unrelated gear in the search. Thin research → widen the RESEARCH (Step 2), not the candidate list. |
+| "I don't have the comp's exact knobs, I'll set sensible values and move on" | Set the default, but mark the block `provenance: unverified`, surface it in the build_preset report's `unverified` list, and TELL the user (Rule B). Never present a default as if it were sourced. Params the number can't validate (comp/mod/delay/reverb feel) come from source/default — never from the proximity metric. |
 | "The record used a 4x12, so I'll add the era-correct cab IR after the NAM amp" | If the capture's `effect_type` is `amp`, the cabinet is already IN the capture — an IR on top is a double cabinet (muffled v1, thrown away). Cab IRs pair only with `effect_type: preamp`. Read `effect_type` in Step 2.6; the real rig's cab list is research color, not a block to add. |
 | "I'll present `tone3000-fetch` and substitute side-by-side as (a)/(b) — let the user pick whichever" | NO. The two are not peers. The user has stated the rule: missing plugin → propose import first; substitution only when no other solution; even then ask. The ask leads with `tone3000-fetch`; substitution surfaces only if (a) is closed (no tone3000 result, fetch error, or user veto). |
 | "I'll auto-pick the closest substitute and just confirm with the user (y/n)" | The y/n shortcut collapses the candidate list to one option of your choosing. When substitution is genuinely the path forward (after `tone3000-fetch` is closed), present 3–5 candidates from `openrig://plugins` with matching `block_type` and adjacent `brand` / `display_name` — let the user pick. Auto-picking + asking confirmation is the same anti-pattern as auto-picking. |

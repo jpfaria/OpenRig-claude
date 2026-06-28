@@ -89,6 +89,7 @@ blocks:
   - type: dynamics            # FIXED pass-through (researched: MXR Dyna Comp)
     model: compressor_studio_clean
     params: { ratio: 4, threshold_db: -18 }
+    provenance: unverified    # default knobs, no documented source -> surfaced
   - type: gain                # SEARCH the drive ('none' = try the slot empty)
     candidates: [none, nam_ibanez_ts9_a2, nam_proco_rat_a2]
   - type: amp                 # SEARCH the amp (':full_rig' candidate => no cab)
@@ -98,10 +99,43 @@ blocks:
   - type: delay               # FIXED pass-through (time from tempo math)
     model: digital_clean
     params: { time_ms: 343, feedback: 28, mix: 30 }
+    provenance: derived       # delay time computed from the song BPM
   - type: reverb              # FIXED pass-through
     model: hall
-    params: { mix: 14 }
+    params: { mix: 14 }       # no `provenance:` key -> reported as `unverified`
 ```
+
+### Optional `provenance:` helper key (param provenance, Rule B)
+
+Any block MAY carry an optional `provenance:` helper key declaring where its FX
+params came from — `sourced` (documented in a rig rundown / interview),
+`derived` (computed, e.g. a delay time from the song BPM), or `unverified` (a
+sensible default with no source). Like `candidates:`, it is **metadata, stripped
+from the emitted preset** — it never becomes a real OpenRig param. An **absent
+marker is treated as `unverified`** (conservative: a default presented without a
+source must never read as sourced). The marker is for the **FIXED FX params**;
+a SEARCH slot (amp/drive chosen by the number) need not carry one.
+
+The report JSON surfaces it under **`param_provenance`**:
+
+```jsonc
+"param_provenance": {
+  "blocks": [                                   // every FIXED FX block's class
+    { "type": "dynamics", "model": "compressor_studio_clean", "provenance": "unverified" },
+    { "type": "delay",    "model": "digital_clean",           "provenance": "derived" },
+    { "type": "reverb",   "model": "hall",                    "provenance": "unverified" }
+  ],
+  "unverified": [                               // explicit list to tell the user
+    { "type": "dynamics", "model": "compressor_studio_clean" },
+    { "type": "reverb",   "model": "hall" }
+  ]
+}
+```
+
+The `unverified` list is the set of FX blocks whose params are a default with no
+source — the tone-builder reports these to the user, never presenting a default
+as if it were sourced. The proximity number never optimizes a FIXED FX param
+(comp/mod/delay/reverb feel is set from source/default, not by the metric).
 
 ```bash
 # Installed app (macOS) — one tone:

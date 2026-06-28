@@ -126,6 +126,22 @@ ROLE_SEARCH = "search"   # carries a `candidates:` list -> optimized by proximit
 ROLE_TUNE = "tune"       # the ONE eq_eight_band filter -> trimmed (+/-6, held)
 ROLE_FIXED = "fixed"     # everything else -> preserved verbatim in place
 
+# Param provenance (Rule B). A base-chain block MAY carry an optional helper key
+# `provenance:` declaring where its FX params came from:
+#   `sourced`    -- documented (rig rundown / interview) -> used as-is;
+#   `derived`    -- computed (e.g. delay time = tempo math from the song BPM);
+#   `unverified` -- a sensible default with NO source, must be surfaced.
+# Like `candidates:`, this is METADATA, stripped from the emitted preset (it is
+# not a real OpenRig param). A MISSING marker is conservatively `unverified`: a
+# default presented without a source must never read as sourced.
+PROVENANCE_KEY = "provenance"
+PROV_SOURCED = "sourced"
+PROV_DERIVED = "derived"
+PROV_UNVERIFIED = "unverified"
+PROVENANCE_CLASSES = {PROV_SOURCED, PROV_DERIVED, PROV_UNVERIFIED}
+# Helper keys that are build-time metadata, never emitted as OpenRig params.
+HELPER_KEYS = ("candidates", PROVENANCE_KEY)
+
 # Render-output markers proving openrig-render dropped a block despite exit 0.
 DROPPED_BLOCK_MARKERS = (
     "ignoring unsupported or invalid block",
@@ -308,6 +324,46 @@ def classify_chain(blocks: list[dict]) -> list[Slot]:
     return slots
 
 
+def block_provenance(block: dict) -> str:
+    """Classify a block's FX-param provenance (Rule B). Returns the declared
+    `provenance:` marker when it is one of `sourced` / `derived` / `unverified`;
+    an ABSENT or unrecognised marker is conservatively `unverified` -- a default
+    presented without a source must never read as sourced."""
+    val = block.get(PROVENANCE_KEY)
+    return val if val in PROVENANCE_CLASSES else PROV_UNVERIFIED
+
+
+def strip_helper_keys(block: dict) -> dict:
+    """Remove every build-time helper key (`candidates`, `provenance`) from a
+    block in place and return it -- those are metadata, never real OpenRig
+    params, so they are stripped from the emitted preset."""
+    for k in HELPER_KEYS:
+        block.pop(k, None)
+    return block
+
+
+def param_provenance_report(slots: list[Slot]) -> dict:
+    """Build the report's `param_provenance` section from the FIXED FX slots.
+
+    Returns `{"blocks": [{type, model, provenance}, ...], "unverified": [...]}`:
+    every FIXED block's provenance class, plus an explicit `unverified` list of
+    the FX blocks whose params are unverified -- so the agent can surface them
+    to the user (Rule B). SEARCH slots (amp/drive chosen by the number from
+    research-derived candidates) and the TUNE EQ are reported elsewhere; param
+    provenance is for the FIXED FX params only."""
+    blocks: list[dict] = []
+    unverified: list[dict] = []
+    for s in slots:
+        if s.role != ROLE_FIXED:
+            continue
+        prov = block_provenance(s.block)
+        entry = {"type": s.block.get("type"), "model": s.block.get("model"), "provenance": prov}
+        blocks.append(entry)
+        if prov == PROV_UNVERIFIED:
+            unverified.append({"type": entry["type"], "model": entry["model"]})
+    return {"blocks": blocks, "unverified": unverified}
+
+
 def assert_no_dropped_blocks(render_output: str) -> None:
     """Raise if openrig-render's output proves it silently dropped a block.
 
@@ -449,7 +505,7 @@ def _resolve_combo(slots: list[Slot], combo: tuple, flat_eq: dict) -> tuple[list
     si = 0
     for slot in slots:
         if slot.role == ROLE_FIXED:
-            b = copy.deepcopy(slot.block)
+            b = strip_helper_keys(copy.deepcopy(slot.block))
             blocks.append(b)
             if b.get("type") in RESEARCHED_CAB_TYPES:
                 info["has_researched_cab"] = True
@@ -464,8 +520,7 @@ def _resolve_combo(slots: list[Slot], combo: tuple, flat_eq: dict) -> tuple[list
         model, full_rig = parse_candidate(token)
         if model == "none":
             continue
-        b = copy.deepcopy(slot.block)
-        b.pop("candidates", None)
+        b = strip_helper_keys(copy.deepcopy(slot.block))
         b["model"] = model
         if full_rig:
             b["type"] = TYPE_FULL_RIG
@@ -764,6 +819,7 @@ def main(argv=None) -> int:
         "direct": search["direct"],
         "cab_ir": search["cab_ir"],
         "fixed_fx_preserved": fixed_fx,
+        "param_provenance": param_provenance_report(slots),
         "proximity_pct": search["proximity_pct"],
         "self_floor_pct": round(self_floor, 2),
         "within": bool(refined["within"]),

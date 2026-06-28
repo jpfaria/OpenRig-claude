@@ -499,6 +499,83 @@ def test_search_chain_output_has_no_limiter_or_volume():
     assert "volume" not in types
 
 
+# --- param provenance (Rule B: sourced / derived / unverified) -------------
+
+def test_block_provenance_reads_marker():
+    assert bp.block_provenance({"type": "delay", "model": "d", "provenance": "sourced"}) == "sourced"
+    assert bp.block_provenance({"type": "delay", "model": "d", "provenance": "derived"}) == "derived"
+    assert bp.block_provenance({"type": "delay", "model": "d", "provenance": "unverified"}) == "unverified"
+
+
+def test_block_provenance_absent_is_unverified():
+    # a default presented with NO source must NEVER read as sourced (Rule B core)
+    assert bp.block_provenance({"type": "dynamics", "model": "comp"}) == "unverified"
+
+
+def test_block_provenance_unknown_value_is_unverified():
+    # a garbage marker is conservatively treated as unverified, never trusted
+    assert bp.block_provenance({"type": "delay", "model": "d", "provenance": "guessed"}) == "unverified"
+
+
+def test_param_provenance_report_classifies_fixed_and_lists_unverified():
+    blocks = [
+        {"type": "dynamics", "model": "comp", "provenance": "sourced"},
+        {"type": "gain", "candidates": ["od"]},               # SEARCH -> not here
+        {"type": "amp", "candidates": ["a1"]},                # SEARCH -> not here
+        {"type": "filter", "model": bp.EQ_MODEL},             # TUNE   -> not here
+        {"type": "delay", "model": "dig", "provenance": "derived"},
+        {"type": "reverb", "model": "hall"},                  # absent -> unverified
+    ]
+    rep = bp.param_provenance_report(bp.classify_chain(blocks))
+    by_model = {e["model"]: e["provenance"] for e in rep["blocks"]}
+    assert by_model == {"comp": "sourced", "dig": "derived", "hall": "unverified"}
+    # SEARCH amp/drive and the TUNE EQ are reported elsewhere, not as FX provenance
+    assert "a1" not in by_model and "od" not in by_model and bp.EQ_MODEL not in by_model
+    # the explicit unverified list surfaces exactly the unsourced FX block(s)
+    assert {e["model"] for e in rep["unverified"]} == {"hall"}
+
+
+def test_search_chain_strips_provenance_from_fixed_block():
+    delay = {"type": "delay", "model": "dig", "enabled": True,
+             "params": {"time_ms": 343}, "provenance": "derived"}
+    blocks = [
+        {"type": "amp", "candidates": ["a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+        delay,
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), np.zeros(len(FINE)),
+                          measure_fn=lambda b: np.zeros(len(FINE)))
+    emitted = [b for b in res["blocks"] if b.get("model") == "dig"][0]
+    # the helper key is metadata, NOT a real OpenRig param -> stripped from output
+    assert "provenance" not in emitted
+    # the rest of the FIXED block survives verbatim
+    assert emitted["params"] == {"time_ms": 343}
+
+
+def test_search_chain_strips_provenance_from_search_block():
+    blocks = [
+        {"type": "amp", "candidates": ["a"], "provenance": "sourced"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), np.zeros(len(FINE)),
+                          measure_fn=lambda b: np.zeros(len(FINE)))
+    amp = [b for b in res["blocks"] if b.get("model") == "a"][0]
+    assert "provenance" not in amp
+
+
+def test_emitted_preset_never_contains_a_provenance_key():
+    blocks = [
+        {"type": "dynamics", "model": "comp", "provenance": "sourced"},
+        {"type": "gain", "candidates": ["od"], "provenance": "sourced"},
+        {"type": "amp", "candidates": ["a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+        {"type": "reverb", "model": "hall"},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), np.zeros(len(FINE)),
+                          measure_fn=lambda b: np.zeros(len(FINE)))
+    assert all("provenance" not in b for b in res["blocks"])
+
+
 # --- EQ-refine loop (injected fakes) ---------------------------------------
 
 def _winning_preset() -> dict:
