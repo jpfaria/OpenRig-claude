@@ -99,7 +99,14 @@ Build EXACTLY this way, every tone, the same. Improvising is where it breaks.
    captures"); **(3)** for a cranked / MODDED amp with no modded capture: the stock
    researched amp capture PLUS a drive whose CHARACTER matches the mod (e.g. a
    Marshall-in-a-box / hot OD for a Marshall Dookie-Mod) — drive candidates chosen
-   to match the mod, not random pedals. The validator only PICKS among
+   to match the mod, not random pedals. **But when that EXACT capture ITSELF
+   exposes a param axis** covering the needed gain/character (e.g. a modded-amp
+   capture with a `gain` axis like the Dookie-Mod's `[2, 5, 8, 10]`), PREFER
+   cranking that axis via a mapping candidate `{model, params: {gain: N}}` over
+   substituting a stand-in drive — the capture's own axis values ARE the
+   documented research source, and the number picks the axis value (the core
+   amp's gain IS timbre, so it IS number-optimized — unlike the FIXED-FX feel
+   params Rule B keeps OFF the number). The validator only PICKS among
    research-derived candidates; it **NEVER** licenses throwing unrelated gear into
    the search "to see what scores". Thin research → widen the RESEARCH (Step 2),
    not the candidate list with guesses.

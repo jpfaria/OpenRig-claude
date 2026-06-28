@@ -119,16 +119,32 @@ def test_make_preset_shape():
 # --- candidate-token parsing -----------------------------------------------
 
 def test_parse_candidate_plain_model():
-    assert bp.parse_candidate("nam_jcm800_a2") == ("nam_jcm800_a2", False)
+    # a bare-string candidate carries NO per-candidate params (default render)
+    assert bp.parse_candidate("nam_jcm800_a2") == ("nam_jcm800_a2", False, {})
 
 
 def test_parse_candidate_none_token():
-    assert bp.parse_candidate("none") == ("none", False)
+    assert bp.parse_candidate("none") == ("none", False, {})
 
 
 def test_parse_candidate_full_rig_suffix():
     # a ':full_rig' candidate declares a capture that already has the cab
-    assert bp.parse_candidate("nam_rig_a2:full_rig") == ("nam_rig_a2", True)
+    assert bp.parse_candidate("nam_rig_a2:full_rig") == ("nam_rig_a2", True, {})
+
+
+def test_parse_candidate_dict_with_params():
+    # a mapping candidate carries per-candidate params (a capture's own axis)
+    assert bp.parse_candidate({"model": "nam_marshall_1959_slp_a2", "params": {"gain": 8}}) == (
+        "nam_marshall_1959_slp_a2", False, {"gain": 8})
+
+
+def test_parse_candidate_dict_full_rig_true_equals_suffix():
+    # `full_rig: true` on a mapping is equivalent to the ':full_rig' suffix
+    assert bp.parse_candidate({"model": "nam_rig_a2", "full_rig": True}) == ("nam_rig_a2", True, {})
+
+
+def test_parse_candidate_dict_without_params_is_empty():
+    assert bp.parse_candidate({"model": "nam_amp_a1"}) == ("nam_amp_a1", False, {})
 
 
 # --- EQ grid / gains / cap -------------------------------------------------
@@ -497,6 +513,137 @@ def test_search_chain_output_has_no_limiter_or_volume():
     types = [b["type"] for b in res["blocks"]]
     assert "limiter_brickwall" not in models
     assert "volume" not in types
+
+
+# --- param-bearing search candidates (the capture's own axis) --------------
+
+def test_search_chain_dict_candidate_params_land_on_block_and_report():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "amp", "candidates": [{"model": "amp_a", "params": {"gain": 8}}]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref)
+    amp = [b for b in res["blocks"] if b["type"] == "amp"][0]
+    # the mapping candidate's params are REAL block params -> land on the block
+    assert amp["params"] == {"gain": 8}
+    # the chosen-combo summary records the params...
+    assert res["amp_params"] == {"gain": 8}
+    # ...and so does the gear history (so the winning axis value is visible)
+    assert res["history"][0]["amp_params"] == {"gain": 8}
+
+
+def test_search_chain_bare_string_candidate_keeps_default_params():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "amp", "candidates": ["amp_a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref)
+    amp = [b for b in res["blocks"] if b["type"] == "amp"][0]
+    assert amp["params"] == {}            # a bare string renders at default params
+    assert res["amp_params"] == {}
+
+
+def test_search_chain_cranks_capture_own_axis_and_higher_gain_wins():
+    # the under-gained-modded-amp case: ONE capture exposes a `gain` axis; the
+    # search sweeps it as distinct variants and the cranked variant wins.
+    ref = _fine_ltas(20.0)
+
+    def measure_fn(blocks):
+        amp = [b for b in blocks if b["type"] == "amp"]
+        if amp and amp[0]["params"].get("gain") == 10:
+            return ref                    # cranked to 10 -> perfect match
+        return ref + 12.0                 # default / lower gain -> worse
+
+    blocks = [
+        {"type": "amp", "candidates": [
+            "nam_marshall_1959_slp_a2",                              # default (low)
+            {"model": "nam_marshall_1959_slp_a2", "params": {"gain": 8}},
+            {"model": "nam_marshall_1959_slp_a2", "params": {"gain": 10}},
+        ]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn)
+    assert res["amp"] == "nam_marshall_1959_slp_a2"
+    assert res["amp_params"] == {"gain": 10}
+    amp = [b for b in res["blocks"] if b["type"] == "amp"][0]
+    assert amp["params"]["gain"] == 10
+    # all three variants of the same model were searched
+    assert len(res["history"]) == 3
+
+
+def test_search_chain_mixes_string_and_dict_candidates_in_one_slot():
+    ref = _fine_ltas(20.0)
+
+    def measure_fn(blocks):
+        amp = [b for b in blocks if b["type"] == "amp"]
+        if amp and amp[0]["model"] == "amp_b" and amp[0]["params"].get("gain") == 5:
+            return ref
+        return ref + 9.0
+
+    blocks = [
+        {"type": "amp", "candidates": [
+            "amp_a",                                       # bare string
+            {"model": "amp_b", "params": {"gain": 5}},     # mapping
+        ]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn)
+    assert res["amp"] == "amp_b"
+    assert res["amp_params"] == {"gain": 5}
+    assert len(res["history"]) == 2
+
+
+def test_search_chain_drive_dict_candidate_records_per_drive_params():
+    ref = _fine_ltas(20.0)
+
+    def measure_fn(blocks):
+        g = [b for b in blocks if b["type"] == "gain"]
+        return ref if (g and g[0]["params"].get("drive") == 9) else ref + 12.0
+
+    blocks = [
+        {"type": "gain", "candidates": ["od_a", {"model": "od_a", "params": {"drive": 9}}]},
+        {"type": "amp", "candidates": ["amp_a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn)
+    assert res["drives"] == ["od_a"]
+    assert res["drive_params"] == [{"drive": 9}]
+    gain = [b for b in res["blocks"] if b["type"] == "gain"][0]
+    assert gain["params"]["drive"] == 9
+
+
+def test_search_chain_dict_full_rig_true_skips_cab_like_suffix():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "amp", "candidates": [{"model": "rig_amp", "full_rig": True}]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref,
+                          cab_ir="/abs/cab.wav")
+    assert res["amp"] == "rig_amp"
+    assert res["amp_type"] == "full_rig"
+    assert res["cab_ir"] is None
+    assert not any(b["type"] == "ir" for b in res["blocks"])
+    assert any(b["type"] == "full_rig" and b["model"] == "rig_amp" for b in res["blocks"])
+
+
+def test_search_chain_none_still_yields_empty_slot_alongside_dicts():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "gain", "candidates": ["none", {"model": "od_a", "params": {"drive": 3}}]},
+        {"type": "amp", "candidates": ["amp_a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    # 'none' wins (fake reward for the empty-drive render)
+    def measure_fn(blocks):
+        return ref if not any(b["type"] == "gain" for b in blocks) else ref + 12.0
+
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn)
+    assert res["drives"] == []
+    assert res["drive_params"] == []
+    assert not any(b["type"] == "gain" for b in res["blocks"])
 
 
 # --- param provenance (Rule B: sourced / derived / unverified) -------------

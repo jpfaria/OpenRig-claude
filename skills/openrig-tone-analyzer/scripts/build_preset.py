@@ -262,22 +262,40 @@ def make_preset(preset_id: str, name: str, blocks: list[dict]) -> dict:
 FULL_RIG_SUFFIX = ":full_rig"
 
 
-def parse_candidate(token: str) -> tuple[str, bool]:
-    """Parse a SEARCH-slot candidate token into (model_id, is_full_rig).
+def parse_candidate(token: str | dict) -> tuple[str, bool, dict]:
+    """Parse a SEARCH-slot candidate into (model_id, is_full_rig, params).
 
-    - the literal `none` keeps the slot EMPTY (returned verbatim as `none`);
-    - a plain model id is used as-is (NAM ids are snake_case slugs and keep
-      their architecture suffix, e.g. `nam_marshall_1959_slp_a2`);
-    - the optional `:full_rig` suffix declares a capture that already contains
-      the cab -- it sets the block type to `full_rig` and skips the cab
-      unconditionally. (Model ids never contain ':', so the split is safe.)
+    A candidate is EITHER a bare model-id string (rendered at the capture's
+    DEFAULT params) OR a mapping carrying per-candidate params:
+
+      - a bare string -- used as-is (NAM ids are snake_case slugs and keep their
+        architecture suffix, e.g. `nam_marshall_1959_slp_a2`), with EMPTY params;
+      - the literal `none` keeps the slot EMPTY (returned verbatim as `none`);
+      - the optional `:full_rig` suffix declares a capture that already contains
+        the cab -- it sets the block type to `full_rig` and skips the cab
+        unconditionally. (Model ids never contain ':', so the split is safe.)
+      - a mapping `{model: <id>, params: {<axis>: <value>, ...}}` carries
+        per-candidate params applied to that block (e.g. cranking a modded-amp
+        capture's own `gain` axis). An optional `full_rig: true` on the mapping
+        is EQUIVALENT to the `:full_rig` string suffix. Two mappings of the same
+        model with different `params` are two DISTINCT search variants.
+
+    Returns `params = {}` for a bare string; the per-candidate params dict (a
+    fresh copy) for a mapping. The params are REAL block params, never stripped.
     """
+    if isinstance(token, dict):
+        model = str(token["model"]).strip()
+        full_rig = bool(token.get("full_rig", False))
+        params = dict(token.get("params") or {})
+        if model.endswith(FULL_RIG_SUFFIX):
+            model, full_rig = model[: -len(FULL_RIG_SUFFIX)], True
+        return model, full_rig, params
     token = token.strip()
     if token == "none":
-        return "none", False
+        return "none", False, {}
     if token.endswith(FULL_RIG_SUFFIX):
-        return token[: -len(FULL_RIG_SUFFIX)], True
-    return token, False
+        return token[: -len(FULL_RIG_SUFFIX)], True, {}
+    return token, False, {}
 
 
 # --- base-chain classification & forbidden-block stripping -----------------
@@ -290,7 +308,7 @@ class Slot:
 
     role: str
     block: dict
-    candidates: list[str] | None = None
+    candidates: list[str | dict] | None = None
 
 
 def is_forbidden(block: dict) -> bool:
@@ -497,8 +515,9 @@ def _resolve_combo(slots: list[Slot], combo: tuple, flat_eq: dict) -> tuple[list
     """
     blocks: list[dict] = []
     info = {
-        "drives": [], "amp": None, "amp_type": None, "amp_pos": None,
-        "amp_full_rig": False, "core": None, "cab_model": None,
+        "drives": [], "drive_params": [], "amp": None, "amp_type": None,
+        "amp_pos": None, "amp_full_rig": False, "amp_params": {}, "core": None,
+        "core_params": {}, "cab_model": None, "cab_params": {},
         "has_researched_cab": False,
     }
     eq_present = False
@@ -517,7 +536,7 @@ def _resolve_combo(slots: list[Slot], combo: tuple, flat_eq: dict) -> tuple[list
         # SEARCH slot
         token = combo[si]
         si += 1
-        model, full_rig = parse_candidate(token)
+        model, full_rig, params = parse_candidate(token)
         if model == "none":
             continue
         b = strip_helper_keys(copy.deepcopy(slot.block))
@@ -526,19 +545,28 @@ def _resolve_combo(slots: list[Slot], combo: tuple, flat_eq: dict) -> tuple[list
             b["type"] = TYPE_FULL_RIG
         b.setdefault("enabled", True)
         b.setdefault("params", {})
+        # the candidate's per-candidate params are REAL block params (e.g. a
+        # modded-amp capture cranked on its own `gain` axis) -- apply them onto
+        # the searched block so the chosen variant carries them into the preset.
+        if params:
+            b["params"].update(copy.deepcopy(params))
         blocks.append(b)
         t = slot.block.get("type")
         if t == TYPE_GAIN:
             info["drives"].append(model)
+            info["drive_params"].append(dict(params))
         elif t in CAB_ANCHOR_TYPES:
             info["amp"] = model
             info["amp_type"] = TYPE_FULL_RIG if full_rig else t
             info["amp_full_rig"] = full_rig
             info["amp_pos"] = len(blocks) - 1
+            info["amp_params"] = dict(params)
         elif t == TYPE_BODY:
             info["core"] = model
+            info["core_params"] = dict(params)
         elif t == TYPE_CAB:
             info["cab_model"] = model
+            info["cab_params"] = dict(params)
             info["has_researched_cab"] = True
     if not eq_present:
         blocks.append(copy.deepcopy(flat_eq))
@@ -588,8 +616,11 @@ def search_chain(
 
         prox = float(score_fn(ref_fine_ltas, measure_fn(blocks)))
         rec = {
-            "amp": info["amp"], "amp_type": info["amp_type"], "drives": list(info["drives"]),
-            "core": info["core"], "direct": direct, "cab_ir": cab_used,
+            "amp": info["amp"], "amp_type": info["amp_type"],
+            "amp_params": dict(info["amp_params"]), "drives": list(info["drives"]),
+            "drive_params": [dict(p) for p in info["drive_params"]],
+            "core": info["core"], "core_params": dict(info["core_params"]),
+            "direct": direct, "cab_ir": cab_used,
             "proximity_pct": round(prox, 2),
         }
         history.append(rec)
@@ -599,10 +630,12 @@ def search_chain(
     if best is None:
         raise ValueError("no candidate combos to search")
     return {
-        "amp": best["amp"], "amp_type": best["amp_type"], "drives": best["drives"],
-        "core": best["core"], "direct": best["direct"], "cab_ir": best["cab_ir"],
-        "proximity_pct": round(best["_prox"], 2), "blocks": best["blocks"],
-        "history": history,
+        "amp": best["amp"], "amp_type": best["amp_type"],
+        "amp_params": best["amp_params"], "drives": best["drives"],
+        "drive_params": best["drive_params"], "core": best["core"],
+        "core_params": best["core_params"], "direct": best["direct"],
+        "cab_ir": best["cab_ir"], "proximity_pct": round(best["_prox"], 2),
+        "blocks": best["blocks"], "history": history,
     }
 
 
@@ -814,8 +847,11 @@ def main(argv=None) -> int:
         "name": name,
         "amp": search["amp"],
         "amp_type": search["amp_type"],
+        "amp_params": search["amp_params"],
         "drives": search["drives"],
+        "drive_params": search["drive_params"],
         "core": search["core"],
+        "core_params": search["core_params"],
         "direct": search["direct"],
         "cab_ir": search["cab_ir"],
         "fixed_fx_preserved": fixed_fx,

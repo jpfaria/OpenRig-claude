@@ -105,6 +105,37 @@ blocks:
     params: { mix: 14 }       # no `provenance:` key -> reported as `unverified`
 ```
 
+### Param-bearing search candidates (`{model, params}`)
+
+A SEARCH slot's `candidates:` entry is EITHER a **bare model-id string** (rendered
+at the capture's DEFAULT params) OR a **mapping** carrying per-candidate params:
+
+```yaml
+- type: amp
+  candidates:
+    - nam_marshall_plexi                                    # bare string -> default params
+    - { model: nam_marshall_1959_slp_a2, params: { gain: 8 } }
+    - { model: nam_marshall_1959_slp_a2, params: { gain: 10 } }   # same model, cranked
+```
+
+This lets the search **sweep a capture's own gain/character axis**: many NAM
+captures expose a discrete param axis (e.g. the "1959 SLP Dookie-Mod" capture
+`nam_marshall_1959_slp_a2` has a `gain` axis `[2, 5, 8, 10]` whose default is
+low). Each mapping is a **distinct search variant** — two `gain` values of one
+model are two combos — so the EXACT modded-amp capture can be rendered cranked
+instead of losing the search to a stand-in amp + drive purely because it was
+under-gained at its default. The chosen variant's `params` are applied to that
+block both in the render and in the final preset. An optional `full_rig: true`
+on a mapping is equivalent to the `:full_rig` string suffix; `none` stays a bare
+string sentinel (empty slot). The mechanism is general — it applies to every
+SEARCH slot (amp/preamp/body core, gain drives, cab), not just amps.
+
+These searched amp/drive/core params are **core-timbre, chosen by the proximity
+number** (the amp's gain IS the timbre) — they are NOT FIXED-FX provenance and do
+NOT appear under `param_provenance`. The report records the chosen variant's
+params under `amp_params` / `drive_params` / `core_params` (and in each
+`gear_history` entry) so the winning axis value is visible.
+
 ### Optional `provenance:` helper key (param provenance, Rule B)
 
 Any block MAY carry an optional `provenance:` helper key declaring where its FX
