@@ -2,26 +2,37 @@
 """Offline single-tone preset builder -- the deterministic "FORM" of the
 openrig-tone-builder skill as ONE portable tool. Builds ONE tone per run.
 
-Given a surviving isolated-guitar reference, a roster of candidate amp/drive
-MODEL IDs, and a cab IR, this drives the whole deterministic loop offline:
+The caller (the tone-builder FORM) researches the COMPLETE rig and writes it as
+a **base-chain YAML**: a flat `blocks:` list in signal order, where every
+researched block (compressor, wah, pitch, modulation, delay, reverb, a
+non-EQ filter, an acoustic body, ...) is present with its researched params.
+Blocks the tool should SEARCH carry a `candidates:` list instead of a fixed
+`model`; the ONE `eq_eight_band_parametric` filter is the slot the tool TUNES.
+This tool keeps every other block FIXED/verbatim and optimizes only the
+timbre-determining slots:
 
   1. Measure the reference ONCE: the honest fingerprint (`fingerprint_match_target`)
      gives the reliable range / mask and the per-song self-floor BAR; the
      1/3-octave LTAS is cached as the proximity target.
-  2. Per amp, detect whether the capture is DIRECT (head-only, fizzy top that
-     needs a cab) by rendering it alone and measuring the top-octave excess.
-     A `full_rig` capture already contains the cab and is NEVER direct.
-  3. Gear search: for each amp x drive (+ the cab IR iff the amp is direct),
-     build the chain `drive(s) -> amp -> cab -> EQ(flat)` -- NO limiter, NO
-     volume -- render it, and score `weighted_spectral_proximity_pct` over the
-     reliable range. Pick the best combo.
+  2. Classify the base chain: SEARCH (preamp/amp/body core + gain drive(s) +
+     cab -- those carrying `candidates:`), TUNE (the eq_eight_band filter), and
+     FIXED pass-through (everything else, preserved verbatim in signal order).
+  3. Gear search: enumerate the cartesian product over the SEARCH slots'
+     candidate lists (`none` => that slot empty; multiple `gain` slots => a
+     drive STACK). For each combo, render the FULL chain (all FIXED FX present)
+     and score `weighted_spectral_proximity_pct` over the reliable range. Pick
+     the best combo. `--cab-ir` auto-inserts a `generic_ir` cab right after the
+     amp ONLY when the amp renders DIRECT, there is no researched cab already,
+     and the amp is not `:full_rig`.
   4. EQ refine on the winner: iterate render -> `next_band_gains` (CAPPED at
      +/-6 dB, dead-top / out-of-range bands HELD at 0) -> apply, until
      within-floor / plateau / iteration cap.
   5. Headroom: set the EQ `output_db` so the DI peak lands ~ -7 dBFS. The chain
-     ENDS AT THE EQ -- no limiter, no volume block is ever added.
-  6. Write the flat preset YAML (`openrig-render --chain` shape) and a report
-     JSON (best amp/drive/cab, proximity, self-floor, within, peak, history).
+     ENDS AT THE EQ -- no limiter, no volume block is ever added (any
+     `limiter_brickwall` / `volume` in the base chain is STRIPPED).
+  6. Write the preset YAML (`openrig-render --chain` shape) and a report JSON
+     (chosen amp/drive(s)/cab, proximity, self-floor, within, peak, the FIXED
+     FX preserved, history).
 
 This SUPERSEDES the old `rebuild_preset.py`, which applied raw uncapped
 eq_match gains (piling low-mid, killing presence) and finalised the chain with
@@ -29,6 +40,13 @@ a limiter + volume -- both now forbidden. The pure helpers (YAML round-trip,
 EQ grid, absolute-gain application, headroom normalisation) are salvaged from
 it but ADAPTED: the EQ trim caps at +/-6 (not +/-24) and the chain ends at the
 EQ.
+
+CRITICAL real-world detail: `openrig-render` exits 0 even when it cannot build
+a block -- it prints `ignoring unsupported or invalid block ...` /
+`unsupported nam model '<id>'` and renders WITHOUT that block. So a non-zero
+exit is NOT enough: the real render path captures stdout+stderr and treats
+those markers as a HARD FAILURE (`assert_no_dropped_blocks`), so a typo'd model
+id can never silently ship a preset missing a block.
 
 The render and measurement calls are INJECTED so the loop logic is unit-testable
 without the Rust binary or large WAVs. `main()` wires the real subprocess calls.
@@ -44,11 +62,13 @@ from __future__ import annotations
 
 import argparse
 import copy
+import itertools
 import json
 import math
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -81,9 +101,37 @@ CAB_IR_FILE_KEY = "file"
 # `full_rig`; a user-loaded IR is `ir`; the parametric EQ is a `filter`.
 TYPE_GAIN = "gain"
 TYPE_AMP = "amp"
+TYPE_PREAMP = "preamp"
+TYPE_BODY = "body"
+TYPE_CAB = "cab"
 TYPE_FULL_RIG = "full_rig"
 TYPE_IR = "ir"
 TYPE_FILTER = "filter"
+
+# Core, head-style timbre slots that the `--cab-ir` direct-capture rule may sit
+# a cab after. An acoustic `body` core is searched like an amp but is NEVER
+# given a guitar cab.
+CAB_ANCHOR_TYPES = {TYPE_AMP, TYPE_PREAMP}
+# Block types that count as a researched cab already in the chain (so the
+# `--cab-ir` auto-insert is suppressed -- never double a cabinet).
+RESEARCHED_CAB_TYPES = {TYPE_CAB, TYPE_IR}
+
+# Blocks the chain must NEVER emit: a brickwall limiter or a volume block. They
+# are stripped from the base chain and never re-added (the chain ends at the EQ).
+FORBIDDEN_MODELS = {"limiter_brickwall"}
+FORBIDDEN_TYPES = {"volume"}
+
+# Slot roles after classifying the base chain.
+ROLE_SEARCH = "search"   # carries a `candidates:` list -> optimized by proximity
+ROLE_TUNE = "tune"       # the ONE eq_eight_band filter -> trimmed (+/-6, held)
+ROLE_FIXED = "fixed"     # everything else -> preserved verbatim in place
+
+# Render-output markers proving openrig-render dropped a block despite exit 0.
+DROPPED_BLOCK_MARKERS = (
+    "ignoring unsupported or invalid block",
+    "unsupported or invalid block",
+    "unsupported nam model",
+)
 
 # eq_match.py operates on this fixed octave grid: band1 = high-pass, bands 2-7
 # = peak, band8 = high-shelf. The EQ bands MUST sit on these centres.
@@ -195,19 +243,87 @@ def make_preset(preset_id: str, name: str, blocks: list[dict]) -> dict:
     return {"id": preset_id, "name": name, "blocks": blocks}
 
 
-def parse_amp_token(token: str) -> tuple[str, str]:
-    """Parse an `--amps` token into (model_id, block_type).
+FULL_RIG_SUFFIX = ":full_rig"
 
-    A plain model id is a head-only `amp`. The optional `:full_rig` suffix
-    declares a full-rig capture (cab baked in) -- the only block type that
-    skips the cab unconditionally. Defaults to `amp` so plain model ids work
-    unchanged. (NAM model ids are snake_case slugs, never containing ':'.)
+
+def parse_candidate(token: str) -> tuple[str, bool]:
+    """Parse a SEARCH-slot candidate token into (model_id, is_full_rig).
+
+    - the literal `none` keeps the slot EMPTY (returned verbatim as `none`);
+    - a plain model id is used as-is (NAM ids are snake_case slugs and keep
+      their architecture suffix, e.g. `nam_marshall_1959_slp_a2`);
+    - the optional `:full_rig` suffix declares a capture that already contains
+      the cab -- it sets the block type to `full_rig` and skips the cab
+      unconditionally. (Model ids never contain ':', so the split is safe.)
     """
-    if ":" in token:
-        model, _, suffix = token.rpartition(":")
-        if suffix == TYPE_FULL_RIG:
-            return model, TYPE_FULL_RIG
-    return token, TYPE_AMP
+    token = token.strip()
+    if token == "none":
+        return "none", False
+    if token.endswith(FULL_RIG_SUFFIX):
+        return token[: -len(FULL_RIG_SUFFIX)], True
+    return token, False
+
+
+# --- base-chain classification & forbidden-block stripping -----------------
+
+@dataclass
+class Slot:
+    """A classified base-chain block: its role (search/tune/fixed), the block
+    dict (a deep copy -- never the caller's), and its candidate list when it is
+    a SEARCH slot."""
+
+    role: str
+    block: dict
+    candidates: list[str] | None = None
+
+
+def is_forbidden(block: dict) -> bool:
+    return block.get("model") in FORBIDDEN_MODELS or block.get("type") in FORBIDDEN_TYPES
+
+
+def strip_forbidden(blocks: list[dict]) -> list[dict]:
+    """Return the chain with every `limiter_brickwall` / `volume` block removed
+    (deep-copied, so the caller's list is untouched). The chain ends at the EQ."""
+    return [copy.deepcopy(b) for b in blocks if not is_forbidden(b)]
+
+
+def classify_chain(blocks: list[dict]) -> list[Slot]:
+    """Classify a flat base chain (signal order preserved) into SEARCH / TUNE /
+    FIXED slots, dropping any forbidden (`limiter_brickwall` / `volume`) block.
+
+    - a block carrying a non-empty `candidates:` list => SEARCH (optimized);
+    - the `eq_eight_band_parametric` filter (no candidates) => TUNE (trimmed);
+    - everything else (dynamics, wah, pitch, mod, delay, reverb, a non-EQ
+      filter, a researched cab, ...) => FIXED pass-through, preserved verbatim.
+    """
+    slots: list[Slot] = []
+    for b in strip_forbidden(blocks):
+        cands = b.get("candidates")
+        if cands:
+            slots.append(Slot(ROLE_SEARCH, b, list(cands)))
+        elif b.get("type") == TYPE_FILTER and b.get("model") == EQ_MODEL:
+            slots.append(Slot(ROLE_TUNE, b, None))
+        else:
+            slots.append(Slot(ROLE_FIXED, b, None))
+    return slots
+
+
+def assert_no_dropped_blocks(render_output: str) -> None:
+    """Raise if openrig-render's output proves it silently dropped a block.
+
+    The renderer exits 0 even when it cannot build a block -- it logs
+    `ignoring unsupported or invalid block ...` / `unsupported nam model '<id>'`
+    and renders the chain WITHOUT that block. A typo'd / uninstalled model id
+    must therefore be caught from the OUTPUT, not the exit code, so a preset
+    that silently lost a researched block can never ship."""
+    low = (render_output or "").lower()
+    for marker in DROPPED_BLOCK_MARKERS:
+        if marker in low:
+            raise SystemExit(
+                "openrig-render dropped a block (invalid/uninstalled model id?) -- "
+                "refusing to ship a preset missing a researched block:\n"
+                + (render_output or "").strip()[:800]
+            )
 
 
 # --- pure EQ helpers -------------------------------------------------------
@@ -312,59 +428,125 @@ def _proximity(ref_fine, wet_fine) -> float:
     return float(_common.weighted_spectral_proximity_pct(np.asarray(ref_fine), np.asarray(wet_fine)))
 
 
-def search_gear(
-    amp_candidates: list[tuple[str, str]],
-    drive_candidates: list[str],
-    cab_ir,
+def _resolve_combo(slots: list[Slot], combo: tuple, flat_eq: dict) -> tuple[list[dict], dict]:
+    """Resolve one candidate combo into a full chain (without the auto cab yet).
+
+    Walks the classified slots in signal order: FIXED blocks are copied
+    verbatim, the TUNE slot becomes a flat-grid EQ, and each SEARCH slot takes
+    its chosen candidate (`none` => omitted; `:full_rig` => `full_rig` type).
+    Returns (blocks, info) where `info` records the chosen amp/drives/core, the
+    amp's position, whether it is full_rig, and whether a researched cab is
+    already present. If the chain carries no EQ slot, a flat EQ is appended so
+    the chain still ends at the EQ.
+    """
+    blocks: list[dict] = []
+    info = {
+        "drives": [], "amp": None, "amp_type": None, "amp_pos": None,
+        "amp_full_rig": False, "core": None, "cab_model": None,
+        "has_researched_cab": False,
+    }
+    eq_present = False
+    si = 0
+    for slot in slots:
+        if slot.role == ROLE_FIXED:
+            b = copy.deepcopy(slot.block)
+            blocks.append(b)
+            if b.get("type") in RESEARCHED_CAB_TYPES:
+                info["has_researched_cab"] = True
+            continue
+        if slot.role == ROLE_TUNE:
+            blocks.append(copy.deepcopy(flat_eq))
+            eq_present = True
+            continue
+        # SEARCH slot
+        token = combo[si]
+        si += 1
+        model, full_rig = parse_candidate(token)
+        if model == "none":
+            continue
+        b = copy.deepcopy(slot.block)
+        b.pop("candidates", None)
+        b["model"] = model
+        if full_rig:
+            b["type"] = TYPE_FULL_RIG
+        b.setdefault("enabled", True)
+        b.setdefault("params", {})
+        blocks.append(b)
+        t = slot.block.get("type")
+        if t == TYPE_GAIN:
+            info["drives"].append(model)
+        elif t in CAB_ANCHOR_TYPES:
+            info["amp"] = model
+            info["amp_type"] = TYPE_FULL_RIG if full_rig else t
+            info["amp_full_rig"] = full_rig
+            info["amp_pos"] = len(blocks) - 1
+        elif t == TYPE_BODY:
+            info["core"] = model
+        elif t == TYPE_CAB:
+            info["cab_model"] = model
+            info["has_researched_cab"] = True
+    if not eq_present:
+        blocks.append(copy.deepcopy(flat_eq))
+    return blocks, info
+
+
+def search_chain(
+    slots: list[Slot],
     ref_fine_ltas,
     measure_fn,
+    cab_ir=None,
     score_fn=None,
+    flat_eq: dict | None = None,
 ) -> dict:
-    """Search amp x drive (+ cab iff the amp is direct) for the best spectral
-    proximity to the reference, over the reliable range.
+    """Search the cartesian product over the base chain's SEARCH slots for the
+    full chain with the best spectral proximity to the reference.
 
-    `measure_fn(blocks) -> fine_ltas` renders + measures; `score_fn(ref, wet)`
+    Each combo renders the FULL chain (all FIXED FX in place, flat EQ). The
+    `--cab-ir` is auto-inserted right after the amp ONLY when the amp renders
+    DIRECT, there is no researched cab already, and the amp is not `:full_rig`.
+    `measure_fn(blocks) -> fine_ltas` renders+measures; `score_fn(ref, wet)`
     scores proximity (defaults to the energy-weighted, reliable-range metric).
-    Returns the winning combo, its flat-EQ blocks, and the ranked history.
+    Returns the winning chain, the chosen gear, and the ranked history.
     """
     score_fn = _proximity if score_fn is None else score_fn
+    flat_eq = flat_eq_block() if flat_eq is None else flat_eq
+    search_slots = [s for s in slots if s.role == ROLE_SEARCH]
+    cand_lists = [s.candidates for s in search_slots]
+
+    # cab need is a property of the AMP model (measured once per amp), not the
+    # drive/combo -- cache it across combos.
+    cab_cache: dict[tuple, tuple[bool, object]] = {}
     history: list[dict] = []
     best: dict | None = None
 
-    # cab need is a property of the AMP (measured once per amp), not the drive.
-    cab_cache: dict[tuple[str, str], tuple[bool, object]] = {}
-    for amp_model, amp_type in amp_candidates:
-        key = (amp_model, amp_type)
-        if key not in cab_cache:
-            cab_cache[key] = decide_cab(amp_model, amp_type, cab_ir, measure_fn)
-        direct, cab_for_amp = cab_cache[key]
+    for combo in itertools.product(*cand_lists):
+        blocks, info = _resolve_combo(slots, combo, flat_eq)
 
-        for drive in drive_candidates:
-            drives = [] if drive == "none" else [drive]
-            blocks = assemble_blocks(drives, amp_model, amp_type=amp_type, cab_ir=cab_for_amp)
-            prox = score_fn(ref_fine_ltas, measure_fn(blocks))
-            rec = {
-                "amp": amp_model,
-                "amp_type": amp_type,
-                "drive": drive,
-                "direct": direct,
-                "cab_ir": cab_for_amp,
-                "proximity_pct": round(float(prox), 2),
-            }
-            history.append(rec)
-            if best is None or prox > best["proximity_pct"]:
-                best = {**rec, "proximity_pct": float(prox), "blocks": blocks}
+        direct, cab_used = False, None
+        if info["amp"] and cab_ir is not None and not info["has_researched_cab"]:
+            key = (info["amp"], info["amp_type"])
+            if key not in cab_cache:
+                cab_cache[key] = decide_cab(info["amp"], info["amp_type"], cab_ir, measure_fn)
+            direct, cab_used = cab_cache[key]
+            if cab_used is not None and info["amp_pos"] is not None:
+                blocks.insert(info["amp_pos"] + 1, cab_block(cab_used))
+
+        prox = float(score_fn(ref_fine_ltas, measure_fn(blocks)))
+        rec = {
+            "amp": info["amp"], "amp_type": info["amp_type"], "drives": list(info["drives"]),
+            "core": info["core"], "direct": direct, "cab_ir": cab_used,
+            "proximity_pct": round(prox, 2),
+        }
+        history.append(rec)
+        if best is None or prox > best["_prox"]:
+            best = {**rec, "_prox": prox, "blocks": blocks}
 
     if best is None:
-        raise ValueError("no amp/drive candidates to search")
+        raise ValueError("no candidate combos to search")
     return {
-        "amp": best["amp"],
-        "amp_type": best["amp_type"],
-        "drive": best["drive"],
-        "direct": best["direct"],
-        "cab_ir": best["cab_ir"],
-        "proximity_pct": round(best["proximity_pct"], 2),
-        "blocks": best["blocks"],
+        "amp": best["amp"], "amp_type": best["amp_type"], "drives": best["drives"],
+        "core": best["core"], "direct": best["direct"], "cab_ir": best["cab_ir"],
+        "proximity_pct": round(best["_prox"], 2), "blocks": best["blocks"],
         "history": history,
     }
 
@@ -454,35 +636,46 @@ def _peak_dbfs_of(wav_path: str) -> float:
     return 20.0 * math.log10(peak) if peak > 0 else -120.0
 
 
-def _split_csv(raw: str) -> list[str]:
-    return [tok.strip() for tok in raw.split(",") if tok.strip()]
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Offline single-tone OpenRig preset builder (the FORM)")
+    ap.add_argument("--base-chain", required=True,
+                    help="researched full-rig base-chain YAML (flat `blocks:` in signal order; "
+                         "SEARCH slots carry `candidates:`, the eq_eight_band filter is TUNED)")
     ap.add_argument("--ref", required=True, help="isolated-guitar reference WAV")
-    ap.add_argument("--amps", required=True,
-                    help="comma-separated amp MODEL IDs (suffix ':full_rig' for a full-rig capture)")
-    ap.add_argument("--drives", required=True,
-                    help="comma-separated drive MODEL IDs; the literal 'none' means amp-only")
-    ap.add_argument("--cab-ir", required=True, help="4x12 cab IR WAV (used only when an amp is direct)")
+    ap.add_argument("--cab-ir", default="",
+                    help="cab IR WAV; auto-inserted after the amp ONLY when the amp renders direct "
+                         "and no researched cab is present (omit for a full-rig / cabbed base chain)")
     ap.add_argument("--render-bin", required=True, help="path to the installed openrig-render")
     ap.add_argument("--di", required=True, help="bundled DI WAV (assets/audio/input.wav)")
     ap.add_argument("--plugins-root", default="",
                     help="override plugins root (OPENRIG_PLUGINS_ROOT); omit with the installed binary")
     ap.add_argument("--dyld-lib", default="",
                     help="extra DYLD_FALLBACK_LIBRARY_PATH (dev-tree macOS NAM dylib only)")
-    ap.add_argument("--out-preset", required=True, help="write the flat preset YAML here")
-    ap.add_argument("--name", required=True, help="display name for the preset")
-    ap.add_argument("--id", required=True, help="preset id / slug")
+    ap.add_argument("--out-preset", required=True, help="write the preset YAML here")
+    ap.add_argument("--name", default="", help="display name (default: base chain's `name`)")
+    ap.add_argument("--id", default="", help="preset id / slug (default: base chain's `id`)")
     ap.add_argument("--out-report", default="", help="report JSON path (default: next to the preset)")
     ap.add_argument("--max-iters", type=int, default=6)
     args = ap.parse_args(argv)
 
+    # Parse the base chain and classify its slots (forbidden blocks stripped).
+    base = load_yaml(args.base_chain) or {}
+    raw_blocks = base.get("blocks") or []
+    if not isinstance(raw_blocks, list) or not raw_blocks:
+        raise SystemExit(f"--base-chain has no `blocks:` list: {args.base_chain}")
+    slots = classify_chain(raw_blocks)
+    preset_id = args.id or base.get("id") or "preset"
+    name = args.name or base.get("name") or preset_id
+    cab_ir = args.cab_ir or None
+    fixed_fx = [
+        {"type": s.block.get("type"), "model": s.block.get("model")}
+        for s in slots if s.role == ROLE_FIXED
+    ]
+
     out_preset = Path(args.out_preset)
     out_preset.parent.mkdir(parents=True, exist_ok=True)
     out_report = Path(args.out_report) if args.out_report else out_preset.with_suffix(".report.json")
-    work = out_preset.parent / f".{args.id}-build"
+    work = out_preset.parent / f".{preset_id}-build"
     work.mkdir(parents=True, exist_ok=True)
 
     env = dict(os.environ)
@@ -494,7 +687,7 @@ def main(argv=None) -> int:
     counter = {"n": 0}
 
     def _render(blocks_or_preset) -> str:
-        preset = blocks_or_preset if "blocks" in blocks_or_preset else make_preset(args.id, args.name, blocks_or_preset)
+        preset = blocks_or_preset if "blocks" in blocks_or_preset else make_preset(preset_id, name, blocks_or_preset)
         counter["n"] += 1
         yml = work / f"r{counter['n']:03d}.yaml"
         wav = work / f"r{counter['n']:03d}.wav"
@@ -505,6 +698,10 @@ def main(argv=None) -> int:
         )
         if r.returncode != 0:
             raise SystemExit(f"render failed (exit {r.returncode}):\n{r.stderr}\n{r.stdout}")
+        # openrig-render exits 0 even when it could not build a block -- catch a
+        # dropped/invalid model id from the OUTPUT so a preset never silently
+        # ships missing a researched block.
+        assert_no_dropped_blocks((r.stdout or "") + "\n" + (r.stderr or ""))
         return str(wav)
 
     def measure_blocks(blocks) -> np.ndarray:
@@ -523,17 +720,13 @@ def main(argv=None) -> int:
     ref_8band = normalized_ltas(ref_sig, ref_sr)
     hold_mask = coarse_hold_mask(ref_8band, reliable_range)
 
-    # 2-3. Gear search.
-    amp_candidates = [parse_amp_token(t) for t in _split_csv(args.amps)]
-    drive_candidates = _split_csv(args.drives)
-    if "none" not in drive_candidates:
-        drive_candidates.append("none")
-    search = search_gear(amp_candidates, drive_candidates, args.cab_ir, ref_fine, measure_blocks)
-    print(f"gear: amp={search['amp']} ({search['amp_type']}) drive={search['drive']} "
-          f"direct={search['direct']} proximity={search['proximity_pct']:.2f}")
+    # 2-3. Search the timbre slots (full chain rendered each combo).
+    search = search_chain(slots, ref_fine, measure_blocks, cab_ir=cab_ir)
+    print(f"gear: amp={search['amp']} ({search['amp_type']}) drives={search['drives']} "
+          f"core={search['core']} direct={search['direct']} proximity={search['proximity_pct']:.2f}")
 
-    # 4. EQ refine on the winner.
-    winner = make_preset(args.id, args.name, search["blocks"])
+    # 4. EQ refine on the winning full chain.
+    winner = make_preset(preset_id, name, search["blocks"])
     set_eq_grid(winner)
 
     def measure_preset(preset, it) -> dict:
@@ -549,24 +742,28 @@ def main(argv=None) -> int:
                         max_iters=args.max_iters)
     final = refined["final_preset"]
 
-    # 5. Headroom -- chain ends at the EQ (no limiter, no volume).
+    # 5. Headroom -- chain ends at the EQ (no limiter, no volume). Strip any
+    # forbidden block defensively before writing.
     normalize_for_headroom(final)
 
     def render_peak(preset) -> float:
         return _peak_dbfs_of(_render(preset))
 
     peak_db = headroom_pass(final, render_peak)
+    final["blocks"] = strip_forbidden(final["blocks"])
 
     # 6. Write outputs.
     dump_yaml(final, str(out_preset))
     report = {
-        "id": args.id,
-        "name": args.name,
+        "id": preset_id,
+        "name": name,
         "amp": search["amp"],
         "amp_type": search["amp_type"],
-        "drive": search["drive"],
+        "drives": search["drives"],
+        "core": search["core"],
         "direct": search["direct"],
         "cab_ir": search["cab_ir"],
+        "fixed_fx_preserved": fixed_fx,
         "proximity_pct": search["proximity_pct"],
         "self_floor_pct": round(self_floor, 2),
         "within": bool(refined["within"]),

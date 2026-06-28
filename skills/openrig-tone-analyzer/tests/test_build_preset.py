@@ -116,14 +116,19 @@ def test_make_preset_shape():
     assert p["blocks"] is blocks
 
 
-# --- amp-token parsing -----------------------------------------------------
+# --- candidate-token parsing -----------------------------------------------
 
-def test_parse_amp_token_plain_model_is_amp():
-    assert bp.parse_amp_token("nam_jcm800_a1") == ("nam_jcm800_a1", "amp")
+def test_parse_candidate_plain_model():
+    assert bp.parse_candidate("nam_jcm800_a2") == ("nam_jcm800_a2", False)
 
 
-def test_parse_amp_token_full_rig_suffix():
-    assert bp.parse_amp_token("nam_rig_a1:full_rig") == ("nam_rig_a1", "full_rig")
+def test_parse_candidate_none_token():
+    assert bp.parse_candidate("none") == ("none", False)
+
+
+def test_parse_candidate_full_rig_suffix():
+    # a ':full_rig' candidate declares a capture that already has the cab
+    assert bp.parse_candidate("nam_rig_a2:full_rig") == ("nam_rig_a2", True)
 
 
 # --- EQ grid / gains / cap -------------------------------------------------
@@ -237,80 +242,261 @@ def test_coarse_hold_mask_excludes_dead_top_and_out_of_range():
     assert mask[2] == True
 
 
-# --- gear search (injected fakes) ------------------------------------------
+# --- base-chain classification (SEARCH / TUNE / FIXED) ----------------------
 
-def test_search_gear_picks_the_combo_closest_to_the_reference():
-    ref_fine = _fine_ltas(20.0)  # an arbitrary but fixed reference shape
-    target_amp = "good_amp"
-    target_drive = "good_drive"
+def test_classify_chain_roles_and_order_preserved():
+    blocks = [
+        {"type": "dynamics", "model": "comp"},
+        {"type": "gain", "candidates": ["none", "od"]},
+        {"type": "amp", "candidates": ["a1", "a2"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+        {"type": "mod", "model": "chorus"},
+        {"type": "delay", "model": "dig"},
+        {"type": "reverb", "model": "hall"},
+    ]
+    slots = bp.classify_chain(blocks)
+    assert [s.role for s in slots] == [
+        "fixed", "search", "search", "tune", "fixed", "fixed", "fixed",
+    ]
+    # signal order is preserved verbatim
+    assert slots[0].block["model"] == "comp"
+    assert slots[3].block["model"] == bp.EQ_MODEL
+    assert slots[-1].block["model"] == "hall"
+
+
+def test_classify_chain_all_eleven_block_types():
+    # SEARCH = preamp/amp/body/gain/cab (they carry candidates); TUNE = the eq
+    # filter; everything else (incl. a NON-eq filter) is FIXED pass-through.
+    blocks = [
+        {"type": "preamp", "candidates": ["p1"]},
+        {"type": "amp", "candidates": ["a1"]},
+        {"type": "body", "candidates": ["b1"]},
+        {"type": "gain", "candidates": ["od"]},
+        {"type": "cab", "candidates": ["c1"]},
+        {"type": "dynamics", "model": "comp"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+        {"type": "filter", "model": "graphic_eq"},   # a non-EQ filter: FIXED
+        {"type": "wah", "model": "crybaby"},
+        {"type": "pitch", "model": "octaver"},
+        {"type": "mod", "model": "phaser"},
+        {"type": "delay", "model": "tape"},
+        {"type": "reverb", "model": "spring"},
+    ]
+    slots = bp.classify_chain(blocks)
+    assert [s.role for s in slots] == [
+        "search", "search", "search", "search", "search",
+        "fixed", "tune", "fixed", "fixed", "fixed", "fixed", "fixed", "fixed",
+    ]
+
+
+def test_classify_chain_drops_forbidden_blocks():
+    blocks = [
+        {"type": "amp", "candidates": ["a"]},
+        {"type": "volume", "model": "vol"},
+        {"type": "limiter", "model": "limiter_brickwall"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    slots = bp.classify_chain(blocks)
+    models = [s.block.get("model") for s in slots]
+    types = [s.block["type"] for s in slots]
+    assert "limiter_brickwall" not in models
+    assert "volume" not in types
+
+
+def test_strip_forbidden_removes_limiter_and_volume():
+    blocks = [
+        {"type": "amp", "model": "a"},
+        {"type": "limiter", "model": "limiter_brickwall"},
+        {"type": "volume", "model": "vol"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    kept = bp.strip_forbidden(blocks)
+    assert len(kept) == 2
+    assert all(b.get("model") != "limiter_brickwall" for b in kept)
+    assert all(b["type"] != "volume" for b in kept)
+
+
+# --- model-id validation (render exits 0 on a dropped block) ----------------
+
+def test_assert_no_dropped_blocks_passes_on_clean_output():
+    bp.assert_no_dropped_blocks("rendered 480000 samples; wrote out.wav")  # no raise
+
+
+def test_assert_no_dropped_blocks_raises_on_ignored_block():
+    with pytest.raises(SystemExit):
+        bp.assert_no_dropped_blocks("warn: ignoring unsupported or invalid block at preset:2")
+
+
+def test_assert_no_dropped_blocks_raises_on_unsupported_nam_model():
+    with pytest.raises(SystemExit):
+        bp.assert_no_dropped_blocks("unsupported nam model 'nam_typo_x'")
+
+
+# --- base-chain search (injected fakes) ------------------------------------
+
+def test_search_chain_picks_highest_proximity_combo():
+    ref = _fine_ltas(20.0)
 
     def measure_fn(blocks):
         models = [b.get("model") for b in blocks]
-        amp_ok = target_amp in models
-        drive_ok = target_drive in models
-        if amp_ok and drive_ok:
-            return ref_fine                      # perfect match -> proximity 100
-        return ref_fine + 12.0                   # worse on every band
+        if "good_amp" in models and "good_drive" in models:
+            return ref                            # perfect match -> 100
+        return ref + 12.0
 
-    res = bp.search_gear(
-        amp_candidates=[("good_amp", "amp"), ("bad_amp", "amp")],
-        drive_candidates=["none", "good_drive"],
-        cab_ir=None,
-        ref_fine_ltas=ref_fine,
-        measure_fn=measure_fn,
-    )
-    assert res["amp"] == target_amp
-    assert res["drive"] == target_drive
+    blocks = [
+        {"type": "gain", "candidates": ["none", "good_drive"]},
+        {"type": "amp", "candidates": ["good_amp", "bad_amp"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn)
+    assert res["amp"] == "good_amp"
+    assert res["drives"] == ["good_drive"]
     assert res["proximity_pct"] == pytest.approx(100.0, abs=1e-6)
 
 
-def test_search_gear_full_rig_winner_carries_no_cab():
-    ref_fine = _fine_ltas(20.0)
+def test_search_chain_fixed_fx_survive_into_output_verbatim():
+    comp = {"type": "dynamics", "model": "comp_studio", "enabled": True,
+            "params": {"ratio": 4, "threshold": -18}}
+    delay = {"type": "delay", "model": "digital_clean", "enabled": True,
+             "params": {"time_ms": 343, "feedback": 28, "mix": 30}}
+    blocks = [
+        comp,
+        {"type": "gain", "candidates": ["none"]},
+        {"type": "amp", "candidates": ["amp_a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+        delay,
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), np.zeros(len(FINE)),
+                          measure_fn=lambda b: np.zeros(len(FINE)))
+    out = res["blocks"]
+    # the researched FX blocks appear verbatim (same params), in signal order
+    assert comp in out
+    assert delay in out
+    types = [b["type"] for b in out]
+    assert types.index("dynamics") < types.index("amp") < types.index("filter") < types.index("delay")
 
-    # the full_rig amp is the perfect match; its amp-only must never be probed
-    # for cab need, and the winning blocks must contain no ir/cab block.
+
+def test_search_chain_none_drive_yields_empty_drive_slot():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "gain", "candidates": ["none"]},
+        {"type": "amp", "candidates": ["amp_a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref)
+    assert res["drives"] == []
+    assert not any(b["type"] == "gain" for b in res["blocks"])
+
+
+def test_search_chain_multiple_gain_slots_form_a_stack_in_order():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "gain", "candidates": ["boost"]},
+        {"type": "gain", "candidates": ["od"]},
+        {"type": "amp", "candidates": ["amp_a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref)
+    gains = [b["model"] for b in res["blocks"] if b["type"] == "gain"]
+    assert gains == ["boost", "od"]
+    assert res["drives"] == ["boost", "od"]
+
+
+def test_search_chain_full_rig_amp_gets_no_cab():
+    ref = _fine_ltas(20.0)
+
     def measure_fn(blocks):
-        models = [b.get("model") for b in blocks]
-        if "rig_amp" in models:
-            return ref_fine
-        return ref_fine + 15.0
+        # a full_rig amp must never be probed amp-only for cab need; here the
+        # only render is the full chain.
+        return ref
 
-    res = bp.search_gear(
-        amp_candidates=[("rig_amp", "full_rig"), ("head_amp", "amp")],
-        drive_candidates=["none"],
-        cab_ir="/abs/cab.wav",
-        ref_fine_ltas=ref_fine,
-        measure_fn=measure_fn,
-    )
+    blocks = [
+        {"type": "amp", "candidates": ["rig_amp:full_rig"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/cab.wav")
     assert res["amp"] == "rig_amp"
+    assert res["amp_type"] == "full_rig"
     assert res["cab_ir"] is None
     assert not any(b["type"] == "ir" for b in res["blocks"])
+    # the chosen block carries the real full_rig type
+    assert any(b["type"] == "full_rig" and b["model"] == "rig_amp" for b in res["blocks"])
 
 
-def test_search_gear_direct_amp_winner_carries_a_cab():
-    ref_fine = _fine_ltas(20.0)
+def test_search_chain_direct_amp_inserts_cab_right_after_amp():
+    ref = _fine_ltas(20.0)
 
     def measure_fn(blocks):
         models = [b.get("model") for b in blocks]
         types = [b["type"] for b in blocks]
-        # amp-only probe for the direct head: bright top (direct)
+        # the amp-only probe (no cab IR, no drive) reads as a direct head
         if "head_amp" in models and "ir" not in types and "gain" not in types:
-            return _fine_ltas(4.0)               # direct capture
-        if "head_amp" in models:
-            return ref_fine                      # full chain matches well
-        return ref_fine + 15.0
+            return _fine_ltas(4.0)
+        return ref
 
-    res = bp.search_gear(
-        amp_candidates=[("head_amp", "amp")],
-        drive_candidates=["none"],
-        cab_ir="/abs/cab.wav",
-        ref_fine_ltas=ref_fine,
-        measure_fn=measure_fn,
-    )
-    assert res["amp"] == "head_amp"
+    blocks = [
+        {"type": "amp", "candidates": ["head_amp"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/cab.wav")
     assert res["direct"] is True
     assert res["cab_ir"] == "/abs/cab.wav"
-    assert any(b["type"] == "ir" for b in res["blocks"])
+    out = res["blocks"]
+    types = [b["type"] for b in out]
+    assert "ir" in types
+    assert types.index("ir") == types.index("amp") + 1   # cab right after the amp
+
+
+def test_search_chain_researched_cab_blocks_auto_insert():
+    ref = _fine_ltas(20.0)
+
+    # a researched cab (type ir) already in the chain: even a direct amp must
+    # not get a second auto-inserted cab.
+    def measure_fn(blocks):
+        return ref
+
+    blocks = [
+        {"type": "amp", "candidates": ["head_amp"]},
+        {"type": "ir", "model": "generic_ir", "params": {"file": "/abs/researched.wav"}},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/other.wav")
+    irs = [b for b in res["blocks"] if b["type"] == "ir"]
+    assert len(irs) == 1
+    assert irs[0]["params"]["file"] == "/abs/researched.wav"
+
+
+def test_search_chain_body_core_searched_like_amp_and_never_cabbed():
+    ref = _fine_ltas(20.0)
+
+    def measure_fn(blocks):
+        models = [b.get("model") for b in blocks]
+        return ref if "body_good" in models else ref + 12.0
+
+    blocks = [
+        {"type": "body", "candidates": ["body_good", "body_bad"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/cab.wav")
+    assert res["core"] == "body_good"
+    # an acoustic body core never gets a guitar cab, even with --cab-ir given
+    assert not any(b["type"] == "ir" for b in res["blocks"])
+
+
+def test_search_chain_output_has_no_limiter_or_volume():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "gain", "candidates": ["od"]},
+        {"type": "amp", "candidates": ["a"]},
+        {"type": "volume", "model": "vol"},
+        {"type": "limiter", "model": "limiter_brickwall"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref)
+    models = [b.get("model") for b in res["blocks"]]
+    types = [b["type"] for b in res["blocks"]]
+    assert "limiter_brickwall" not in models
+    assert "volume" not in types
 
 
 # --- EQ-refine loop (injected fakes) ---------------------------------------
