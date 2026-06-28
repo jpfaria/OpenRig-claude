@@ -26,7 +26,7 @@ def _run(input_path: Path, tmp_path: Path) -> dict:
 def test_clean_di_basic(clean_di_path: Path, tmp_path: Path) -> None:
     fp = _run(clean_di_path, tmp_path)
 
-    assert fp["schema_version"] == 2
+    assert fp["schema_version"] == 3
     assert fp["source"]["channels"] == 1
     assert fp["source"]["sample_rate_hz"] == 22050
     assert 3.5 < fp["source"]["duration_s"] < 4.5

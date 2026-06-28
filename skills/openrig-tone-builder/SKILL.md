@@ -41,6 +41,44 @@ number.** That is the whole job. You do ONLY this:
   would move the number"). Do not silently ship a dead-feeling preset, and
   do not chase a number that physically cannot move.
 
+## ⛔ THE FORM — one tone, validator-driven, no ears (the deterministic loop)
+
+Build EXACTLY this way, every tone, the same. Improvising is where it breaks.
+
+1. **Fingerprint the reference** → the honest `match_target` (analyzer schema ≥3):
+   `ltas_norm_db` + `reliable_mask` + `reliable_range_hz` + `top_octave_dead` +
+   `self_floor_pct`. **The fingerprint is the validator — not the user's ear.**
+   The user's ear only enters when THEY volunteer a complaint; never fish for it.
+2. **Research the gear** (cited, `tonedb.co` first): guitar, **drive stack**, amp,
+   cab, fx. Never from memory.
+3. **Build the chain YAML** yourself.
+   ⛔ **Cab is mandatory when the amp capture is DIRECT.** Most NAM amp captures
+   (`type: amp`, not full-rig) are head-only. A head with no cab renders a top
+   that is nearly flat to 10 kHz = **fizz = "toy sound."** Detect it: render and
+   measure the top band — if 10 kHz sits within ~15 dB of the body peak, the
+   capture is direct → add a **cab IR** (`type: ir, model: generic_ir`,
+   `params.file` = a 4×12 IR `.wav`) so the speaker rolls the top off (~−20 to
+   −40 dB). A full-rig/`type: full_rig` capture already has the cab — do NOT
+   double it. (The cab block catalog may be empty in a given build; `generic_ir`
+   is the portable loader.)
+4. **Render OFFLINE on the INSTALLED engine, headless, in the BACKGROUND.**
+   Never the desktop GUI — running the GUI binary with stray flags opens a window
+   on the user's screen. Use the console/render adapter; if it is missing from
+   the installed package, that is a packaging bug, not a reason to open the GUI.
+5. **Match over the RELIABLE range only.** Drive `weighted_spectral_proximity_pct`
+   toward `self_floor_pct`. Corrections are a **gentle TRIM (cap ≈ ±6 dB)**; the
+   dead-top and out-of-range bands stay **0**. NEVER gut presence to chase a dead
+   top, NEVER pile low-mid to chase a degraded body (both read higher but sound
+   worse). Headroom: set EQ `output_db` so the DI peaks ≈ −7 dBFS.
+6. **Gear-wrong rule.** If proximity **plateaus well below the floor** across cab
+   and amp options, the GEAR is wrong (or the reference is degraded) — try a
+   different amp/cab, do not crank EQ. The validator preferring a different amp
+   than the researched one is a real signal on a degraded ref; surface both and
+   let the user's ear decide.
+7. **ONE tone at a time.** Never batch-rebuild with an auto eq_match loop — it
+   ships every preset broken at once (it gutted 38 presets). Finalize, write the
+   preset file, and let the user import to validate when they want.
+
 ## ⛔ The degraded-reference trap — when the number LIES (read before any eq_match)
 
 A separated stem from a **mix where the instrument is buried** (e.g. the

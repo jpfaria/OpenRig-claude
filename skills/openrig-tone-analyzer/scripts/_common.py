@@ -359,6 +359,45 @@ def reference_self_floor(
     return float(np.median(proximities))
 
 
+def fingerprint_match_target(signal: np.ndarray, sr: int) -> dict:
+    """The honest, auditable match target for a reference.
+
+    The eq_match loop drives a render toward THIS. It exposes:
+    - ``ltas_norm_db``: the 1/3-octave LTAS, level-normalized (0 dB at the
+      loudest band) — the tonal-balance shape, independent of volume.
+    - ``reliable_mask``: per band, whether it carries trustworthy timbre. A
+      band more than ``AUDIBILITY_FLOOR_DB`` below the body peak is a dead /
+      inaudible band (a separated stem's stripped top, or near-silent deep
+      sub-bass). Those are NOT match targets — chasing them darkens or
+      reshapes the tone (the "99% but muffled" / boxy-low-mid failures).
+    - ``reliable_range_hz``: [low, high] center of the trustworthy span.
+    - ``top_octave_dead``: the >=6.3 kHz region is below the audible floor
+      (AI source-separation artifact) — brilho there must never be matched.
+    - ``self_floor_pct``: the reference's own self-similarity ceiling; a match
+      cannot honestly beat it, so it is the bar (within ~3%), not a fixed 95.
+    """
+    centers = list(THIRD_OCTAVE_CENTERS_HZ)
+    ltas = third_octave_ltas(signal, sr)
+    peak = float(ltas.max())
+    norm = ltas - peak  # 0 dB at the loudest band; negative below
+    reliable = norm >= -AUDIBILITY_FLOOR_DB
+    idx = np.where(reliable)[0]
+    rng = (
+        [int(centers[int(idx[0])]), int(centers[int(idx[-1])])]
+        if len(idx) else [centers[0], centers[-1]]
+    )
+    top = np.asarray(centers) >= 6300
+    top_octave_dead = bool(top.any() and not reliable[top].any())
+    return {
+        "third_octave_centers_hz": centers,
+        "ltas_norm_db": [float(x) for x in norm],
+        "reliable_mask": [bool(x) for x in reliable],
+        "reliable_range_hz": rng,
+        "top_octave_dead": top_octave_dead,
+        "self_floor_pct": float(reference_self_floor(signal, sr)),
+    }
+
+
 def correction_curve_db(
     ref_band_db: Any,
     wet_band_db: Any,

@@ -24,7 +24,7 @@ sys.path.insert(0, str(_HERE.parent))
 
 from scripts import _common  # noqa: E402
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 PDF_FILENAME = "analysis.pdf"
 PDF_PAGE_FIGSIZE = (11.0, 8.5)  # landscape letter, inches
@@ -59,7 +59,12 @@ def _build_section_fingerprint(
     centroid = _common.compute_spectral_centroid_hz(signal_section, sr)
     rolloff = _common.compute_spectral_rolloff_hz(signal_section, sr)
     flatness = _common.compute_spectral_flatness(signal_section, sr)
-    thd = _common.estimate_thd_pct(signal_section, sr)
+    thd_raw = _common.estimate_thd_pct(signal_section, sr)
+    # THD from a fundamental estimate is only meaningful on near-monophonic
+    # content; on chords/polyphony the fundamental detection breaks and the
+    # number saturates (the bogus "200%"). Report it ONLY when trustworthy.
+    thd_reliable = thd_raw <= 50.0
+    thd = thd_raw  # still fed to the classifier (it has its own polyphonic path)
     odd_even = _common.compute_odd_even_harmonic_ratio_db(signal_section, sr)
     tone_profile, tone_conf = _common.classify_gain_character(thd, crest_db, band_energy, peak_db=peak_db)
     rt60, rt60_conf = _common.estimate_rt60_s(signal_section, sr)
@@ -95,7 +100,8 @@ def _build_section_fingerprint(
             "spectral_flatness": float(flatness),
         },
         "distortion": {
-            "thd_estimate_pct": float(thd),
+            "thd_estimate_pct": float(thd_raw) if thd_reliable else None,
+            "thd_reliable": bool(thd_reliable),
             "odd_to_even_harmonic_ratio_db": float(odd_even),
             "gain_character": tone_profile,
             "gain_character_confidence": float(tone_conf),
@@ -103,7 +109,11 @@ def _build_section_fingerprint(
         "time_fx": {
             "reverb_rt60_s": float(rt60) if rt60 is not None else None,
             "reverb_rt60_confidence": float(rt60_conf),
+            # The delay detector is a heuristic envelope cross-correlation; on a
+            # full/sparse stem it produces unstable times. It is a HINT, never a
+            # match target — confirm against tempo (Step 2) before trusting.
             "delay_present": bool(delay_present),
+            "delay_confidence": "low",
             "delay_time_ms_estimate": int(delay_time) if delay_time is not None else None,
             "delay_feedback_estimate_pct": int(delay_fb) if delay_fb is not None else None,
             "modulation_present": bool(mod_present),
