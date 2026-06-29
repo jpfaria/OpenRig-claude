@@ -12,10 +12,13 @@ fixtures/catalog/ -- never on the real OpenRig-plugins tree.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+import yaml
 
+from scripts import resolve_gear
 from scripts.catalog import load_catalog
 from scripts.resolve_gear import EQ_MODEL, resolve
 
@@ -234,3 +237,76 @@ def test_fx_with_unknown_typed_model_and_no_name_goes_unresolved(catalog):
     fx_unres = [u for u in out["unresolved"] if u["slot"] == "fx"]
     assert len(fx_unres) == 1
     _assert_no_guessed_ids(out, catalog)
+
+
+# --- standalone CLI: research JSON -> base-chain YAML --------------------------
+
+def _write_research(tmp_path: Path, research: dict) -> Path:
+    path = tmp_path / "research.json"
+    path.write_text(json.dumps(research), encoding="utf-8")
+    return path
+
+
+def test_cli_resolvable_writes_chain_yaml_and_exits_zero(tmp_path: Path):
+    research = {
+        "id": "gravity", "name": "Gravity",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    out = tmp_path / "base.yaml"
+    rc = resolve_gear.main([
+        "--research", str(rj),
+        "--plugins-root", str(FIXTURES),
+        "--native-models", str(NATIVE),
+        "--out", str(out),
+    ])
+    assert rc == 0
+    chain = yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert chain["id"] == "gravity"
+    amp = next(b for b in chain["blocks"] if b.get("type") == "amp")
+    # the exact signature capture is PINNED -- the agent never typed this id
+    assert amp["model"] == "nam_dumble_ods_john_mayer_a2"
+
+
+def test_cli_defaults_native_models_relative_to_script(tmp_path: Path):
+    # omitting --native-models resolves the shipped list next to resolve_gear.py
+    research = {
+        "id": "x", "name": "X",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    out = tmp_path / "base.yaml"
+    rc = resolve_gear.main([
+        "--research", str(rj),
+        "--plugins-root", str(FIXTURES),
+        "--out", str(out),
+    ])
+    assert rc == 0
+    assert out.exists()
+
+
+def test_cli_unresolvable_amp_exits_nonzero_and_writes_no_chain(tmp_path: Path, capsys):
+    research = {
+        "id": "x", "name": "X",
+        "amp": {"name": "Fender Twin Reverb", "brand": "fender"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    out = tmp_path / "base.yaml"
+    rc = resolve_gear.main([
+        "--research", str(rj),
+        "--plugins-root", str(FIXTURES),
+        "--native-models", str(NATIVE),
+        "--out", str(out),
+    ])
+    assert rc != 0
+    # no usable base chain is written -- the agent must fix research, never guess
+    assert not out.exists()
+    # the unresolved amp slot is reported on stderr
+    err = capsys.readouterr().err.lower()
+    assert "amp" in err
+    assert "fender" in err

@@ -122,7 +122,76 @@ then a FIXED researched cab). It drives the **installed**
 plugins and (on macOS) `libnam_wrapper.dylib` via its bundle, so
 `--plugins-root`/`--dyld-lib` are needed only in a dev tree.
 
-The **base-chain YAML** (flat `blocks:` in signal order):
+### One command: `--research` → validated preset (the agent never types a model id)
+
+`build_preset.py` takes **exactly one** chain source:
+
+- **`--research <research.json>` (the one-command pipeline, recommended).** The
+  agent's ONLY input is a natural-language **research JSON** (cited judgment — an
+  amp, drive pedals, a cab, FX, with sources). `build_preset` builds the offline
+  catalog (from `--plugins-root`) and calls `resolve_gear.resolve`, which turns
+  the research into a catalog-backed base chain — **PINNING** the exact/signature
+  capture and emitting only catalog-known ids. The agent **never types a model
+  id**. If `resolve_gear` cannot back a slot against the catalog, the build
+  **ABORTS before any render**, listing each `{slot, query, reason}` — the agent
+  fixes the research, never guesses an id. A resolved chain then flows through the
+  **same** validate+lint gate → gear search → EQ refine → headroom as a
+  hand-authored base chain. `id`/`name` come from the research JSON (overridable
+  with `--id`/`--name`). The full pipeline is: **research → resolve → gate →
+  search → render**.
+
+  ```bash
+  .venv/bin/python scripts/build_preset.py \
+    --research   /path/to/eval/<song>/research/rhythm.json \
+    --plugins-root /path/to/OpenRig-plugins/plugins/source \
+    --ref        /path/to/eval/<song>/refs/rhythm.wav \
+    --render-bin /Applications/OpenRig.app/Contents/MacOS/openrig-render \
+    --di         /Applications/OpenRig.app/Contents/Resources/assets/audio/input.wav \
+    --out-preset /path/to/eval/<song>/presets/rhythm.yaml
+  # --research REQUIRES --plugins-root (it builds the catalog that pins gear).
+  # --research and --base-chain are MUTUALLY EXCLUSIVE (exactly one is required).
+  ```
+
+  The **research JSON** shape (the agent's cited judgment):
+
+  ```json
+  {
+    "id": "gravity", "name": "Gravity",
+    "amp":   { "name": "Dumble Overdrive Special", "brand": "dumble",
+               "signature": "john mayer", "sources": ["interview"] },
+    "drives": [ { "name": "Ibanez TS808", "brand": "ibanez", "sources": ["rundown"] } ],
+    "cab":   { "name": "Marshall 4x12 V30" },
+    "fx":    [ { "type": "reverb", "name": "spring", "params": { "mix": 14 },
+                 "provenance": "unverified", "sources": [] } ]
+  }
+  ```
+
+- **`--base-chain <base_chain.yaml>` (the lower-level escape path).** A base chain
+  authored verbatim — for manual / off-catalog work (e.g. a `generic_ir` raw wav,
+  or a hand-tuned candidate set). Fully supported; the gate and search are
+  identical. The two flags are mutually exclusive: provide one, not both, not
+  neither.
+
+### Standalone `resolve_gear.py` CLI
+
+`resolve_gear.py` also runs on its own — research JSON in, base-chain YAML out —
+so you can inspect/edit the resolved chain before building, or wire it into a
+different driver:
+
+```bash
+.venv/bin/python scripts/resolve_gear.py \
+  --research      /path/to/research.json \
+  --plugins-root  /path/to/OpenRig-plugins/plugins/source \
+  [--native-models /path/to/native_models.yaml] \
+  [--out          /path/to/base_chain.yaml]
+# Writes the resolved `chain` as YAML to --out (or stdout). --native-models
+# defaults to the list shipped next to the script (resolved relative to __file__).
+# Any UNRESOLVED slot is printed to stderr and exits NON-ZERO — and NO base chain
+# is written: fix the research, never guess a model id.
+```
+
+The **base-chain YAML** `resolve_gear` emits (and `--base-chain` consumes — a flat
+`blocks:` list in signal order):
 
 ```yaml
 id: green_day_basket_case_rhythm
@@ -237,7 +306,8 @@ as if it were sourced. The proximity number never optimizes a FIXED FX param
 (comp/mod/delay/reverb feel is set from source/default, not by the metric).
 
 ```bash
-# Installed app (macOS) — one tone:
+# Installed app (macOS) — one tone, via the --base-chain ESCAPE path (manual /
+# off-catalog authoring; prefer --research above for the one-command pipeline):
 .venv/bin/python scripts/build_preset.py \
   --base-chain /path/to/eval/<song>/chains/rhythm.yaml \
   --ref        /path/to/eval/<song>/refs/rhythm.wav \

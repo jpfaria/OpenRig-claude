@@ -39,10 +39,21 @@ plugins root + native-model list); this module ties to no machine path.
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import sys
 import unicodedata
+from pathlib import Path
 
-__all__ = ["EQ_MODEL", "resolve"]
+import yaml
+
+__all__ = ["EQ_MODEL", "resolve", "main"]
+
+_HERE = Path(__file__).resolve().parent
+# The shipped native-model list, resolved relative to THIS file so the CLI is
+# portable (no machine-tied path). Overridable with --native-models.
+DEFAULT_NATIVE_MODELS = _HERE / "native_models.yaml"
 
 # The one parametric EQ build_preset TUNES (a NATIVE id). Emitted FLAT here.
 EQ_MODEL = "eq_eight_band_parametric"
@@ -232,3 +243,61 @@ def resolve(research: dict, catalog) -> dict:
         },
         "unresolved": unresolved,
     }
+
+
+# --- standalone CLI ----------------------------------------------------------
+
+def main(argv=None) -> int:
+    """Turn a research JSON into a catalog-backed base-chain YAML.
+
+    `resolve_gear.py --research <research.json> --plugins-root <dir>
+       [--native-models <path>] [--out <base_chain.yaml>]`
+
+    Loads the research JSON, builds the offline catalog (the native-model list
+    defaults to the one shipped next to this script), and `resolve`s the research.
+    The `chain` is written as YAML to `--out` (or stdout). Any `unresolved` slots
+    are printed to stderr and make the exit code non-zero -- and NO base chain is
+    written: the agent must fix the research, never guess a model id.
+    """
+    parser = argparse.ArgumentParser(
+        description="Resolve a research JSON into a catalog-backed base-chain YAML."
+    )
+    parser.add_argument("--research", required=True, help="research JSON path")
+    parser.add_argument("--plugins-root", required=True, help="plugin manifests root (or fixture dir)")
+    parser.add_argument("--native-models", default=str(DEFAULT_NATIVE_MODELS),
+                        help="native_models.yaml (defaults to the list shipped next to this script)")
+    parser.add_argument("--out", default="", help="write the base-chain YAML here (default: stdout)")
+    args = parser.parse_args(argv)
+
+    # Imported here so the module imports without the catalog deps present; only
+    # the CLI path needs the on-disk index.
+    from scripts.catalog import load_catalog
+
+    research = json.loads(Path(args.research).read_text(encoding="utf-8"))
+    catalog = load_catalog(args.plugins_root, args.native_models)
+    result = resolve(research, catalog)
+
+    for u in result["unresolved"]:
+        print(
+            f"unresolved [{u.get('slot')}] {u.get('query')!r}: {u.get('reason')}",
+            file=sys.stderr,
+        )
+    if result["unresolved"]:
+        print(
+            f"{len(result['unresolved'])} unresolved slot(s) -- fix the research; "
+            "never guess a model id (no base chain written)",
+            file=sys.stderr,
+        )
+        return 1
+
+    chain_yaml = yaml.safe_dump(result["chain"], sort_keys=False, default_flow_style=False)
+    if args.out:
+        Path(args.out).write_text(chain_yaml, encoding="utf-8")
+    else:
+        sys.stdout.write(chain_yaml)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(_HERE.parent))
+    raise SystemExit(main())

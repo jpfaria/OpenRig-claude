@@ -1268,3 +1268,142 @@ def test_main_clean_chain_renders_and_report_has_gate_keys(tmp_path: Path):
     report = json.loads(out_preset.with_suffix(".report.json").read_text())
     assert "lint" in report
     assert "validation_warnings" in report
+
+
+# --- Part B: one-command --research pipeline (research -> resolve -> gate ----
+# -> search -> render). The agent's ONLY input is the research JSON; it never
+# types a model id -- resolve_gear pins it from the catalog.
+
+def _write_research(tmp_path: Path, research: dict, name: str = "research.json") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(research), encoding="utf-8")
+    return path
+
+
+def _research_args(research: Path, tmp_path: Path, **extra) -> list[str]:
+    args = [
+        "--research", str(research),
+        "--ref", str(tmp_path / "ref.wav"),
+        "--render-bin", "render-bin",
+        "--di", str(tmp_path / "di.wav"),
+        "--plugins-root", str(FIXTURES_CATALOG),
+        "--out-preset", str(tmp_path / "out.yaml"),
+    ]
+    for k, v in extra.items():
+        args += [f"--{k}", str(v)]
+    return args
+
+
+def _noise_wav_factory(tmp_path: Path):
+    import soundfile as sf
+
+    rng = np.random.default_rng(0)
+
+    def _noise_wav(path: Path) -> str:
+        sf.write(str(path), (rng.standard_normal(48000) * 0.05).astype("float32"), 48000)
+        return str(path)
+
+    return _noise_wav
+
+
+def test_main_research_pins_amp_and_reaches_render(tmp_path: Path):
+    _noise = _noise_wav_factory(tmp_path)
+    _noise(tmp_path / "ref.wav")
+    _noise(tmp_path / "di.wav")
+
+    rendered: list = []
+
+    def fake_render(_preset) -> str:
+        rendered.append(1)
+        return _noise(tmp_path / f"r{len(rendered)}.wav")
+
+    research = {
+        "id": "gravity", "name": "Gravity",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    out_preset = tmp_path / "out.yaml"
+    rc = bp.main(_research_args(rj, tmp_path, **{"max-iters": 2}), render_fn=fake_render)
+
+    assert rc == 0
+    assert rendered                             # the resolved chain reached the render
+    out = bp.load_yaml(str(out_preset))
+    # the amp is the PINNED capture resolve_gear found from the research -- the
+    # agent never typed this id
+    amp = next(b for b in out["blocks"] if b.get("type") == "amp")
+    assert amp["model"] == "nam_dumble_ods_john_mayer_a2"
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert report["amp"] == "nam_dumble_ods_john_mayer_a2"
+
+
+def test_main_research_unresolvable_amp_aborts_before_any_render(tmp_path: Path):
+    calls: list = []
+    research = {
+        "id": "x", "name": "X",
+        "amp": {"name": "Fender Twin Reverb", "brand": "fender"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    with pytest.raises(SystemExit) as exc:
+        bp.main(_research_args(rj, tmp_path),
+                render_fn=lambda _p: (calls.append(1), "x.wav")[1])
+    assert calls == []                          # no render before the research is fixed
+    # the abort message names the unresolved amp slot
+    assert "amp" in str(exc.value).lower()
+
+
+def test_main_research_resolved_chain_still_passes_through_the_gate(tmp_path: Path, monkeypatch):
+    # even if resolve somehow emitted an unknown id, the validate+lint gate must
+    # still abort the build BEFORE any render (defense in depth).
+    calls: list = []
+
+    def fake_resolve(_research, _catalog):
+        return {
+            "chain": {"id": "x", "name": "X", "blocks": [
+                {"type": "amp", "model": "totally_made_up_amp", "enabled": True, "params": {}},
+                {"type": "filter", "model": bp.EQ_MODEL, "params": {}},
+            ]},
+            "unresolved": [],
+        }
+
+    monkeypatch.setattr(bp.resolve_gear, "resolve", fake_resolve)
+    rj = _write_research(tmp_path, {"id": "x", "name": "X", "amp": None,
+                                    "drives": [], "cab": None, "fx": []})
+    with pytest.raises(SystemExit):
+        bp.main(_research_args(rj, tmp_path),
+                render_fn=lambda _p: (calls.append(1), "x.wav")[1])
+    assert calls == []
+
+
+def test_main_research_and_base_chain_together_is_arg_error(tmp_path: Path):
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    rj = _write_research(tmp_path, {"id": "x", "name": "X", "amp": None,
+                                    "drives": [], "cab": None, "fx": []})
+    args = [
+        "--base-chain", str(base),
+        "--research", str(rj),
+        "--ref", str(tmp_path / "ref.wav"),
+        "--render-bin", "render-bin",
+        "--di", str(tmp_path / "di.wav"),
+        "--plugins-root", str(FIXTURES_CATALOG),
+        "--out-preset", str(tmp_path / "out.yaml"),
+    ]
+    with pytest.raises(SystemExit):
+        bp.main(args, render_fn=lambda _p: "x.wav")
+
+
+def test_main_neither_research_nor_base_chain_is_arg_error(tmp_path: Path):
+    args = [
+        "--ref", str(tmp_path / "ref.wav"),
+        "--render-bin", "render-bin",
+        "--di", str(tmp_path / "di.wav"),
+        "--plugins-root", str(FIXTURES_CATALOG),
+        "--out-preset", str(tmp_path / "out.yaml"),
+    ]
+    with pytest.raises(SystemExit):
+        bp.main(args, render_fn=lambda _p: "x.wav")

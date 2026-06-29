@@ -93,7 +93,7 @@ sys.path.insert(0, str(_HERE.parent))
 import numpy as np  # noqa: E402
 
 from scripts import _common  # noqa: E402
-from scripts import lint_chain, validate_chain  # noqa: E402
+from scripts import lint_chain, resolve_gear, validate_chain  # noqa: E402
 from scripts.catalog import load_catalog  # noqa: E402
 from scripts.eq_match import next_band_gains, next_highpass_hz  # noqa: E402
 
@@ -882,9 +882,20 @@ def _peak_dbfs_of(wav_path: str) -> float:
 
 def main(argv=None, *, render_fn=None) -> int:
     ap = argparse.ArgumentParser(description="Offline single-tone OpenRig preset builder (the FORM)")
-    ap.add_argument("--base-chain", required=True,
-                    help="researched full-rig base-chain YAML (flat `blocks:` in signal order; "
-                         "SEARCH slots carry `candidates:`, the eq_eight_band filter is TUNED)")
+    # The chain source: EXACTLY ONE of --research (the one-command pipeline: a
+    # natural-language research JSON resolve_gear turns into a catalog-backed base
+    # chain, PINNING every id) or --base-chain (the lower-level escape: a
+    # hand-authored / off-catalog base chain). The mutually-exclusive group is
+    # `required`, so providing both OR neither is an argument error.
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--research", default="",
+                        help="research JSON (the agent's cited judgment); resolve_gear pins it "
+                             "to catalog ids -- the ONE input where the agent never types a model id. "
+                             "Requires --plugins-root. Mutually exclusive with --base-chain")
+    source.add_argument("--base-chain", default="",
+                        help="researched full-rig base-chain YAML (flat `blocks:` in signal order; "
+                             "SEARCH slots carry `candidates:`, the eq_eight_band filter is TUNED). "
+                             "The lower-level escape path for manual / off-catalog authoring")
     ap.add_argument("--ref", required=True, help="isolated-guitar reference WAV")
     ap.add_argument("--cab-model", default="",
                     help="catalog cab PLUGIN model id (a `type: cab` plugin, e.g. ir_marshall_4x12_v30); "
@@ -920,8 +931,32 @@ def main(argv=None, *, render_fn=None) -> int:
             "block directly in the base chain instead."
         )
 
+    # Resolve the chain source. --research is the one-command pipeline: build the
+    # offline catalog and turn the cited research JSON into a catalog-backed base
+    # chain (resolve_gear PINS every id). Any slot the catalog can't back ABORTS
+    # the build with no render -- the agent fixes the research, never guesses an
+    # id. --base-chain is the lower-level escape: a base chain authored verbatim.
+    if args.research:
+        if not args.plugins_root:
+            raise SystemExit("--research requires --plugins-root (to build the catalog that pins gear)")
+        research = json.loads(Path(args.research).read_text(encoding="utf-8"))
+        native = str(_HERE / "native_models.yaml")
+        catalog = load_catalog(args.plugins_root, native)
+        resolved = resolve_gear.resolve(research, catalog)
+        if resolved["unresolved"]:
+            lines = "\n  - ".join(
+                f"{u.get('slot')}: {u.get('query')!r} -- {u.get('reason')}"
+                for u in resolved["unresolved"]
+            )
+            raise SystemExit(
+                "resolve_gear could not back every researched slot against the catalog "
+                "(fix the research -- never guess a model id; no render):\n  - " + lines
+            )
+        base = resolved["chain"]
+    else:
+        base = load_yaml(args.base_chain) or {}
+
     # Parse the base chain and classify its slots (forbidden blocks stripped).
-    base = load_yaml(args.base_chain) or {}
     raw_blocks = base.get("blocks") or []
     if not isinstance(raw_blocks, list) or not raw_blocks:
         raise SystemExit(f"--base-chain has no `blocks:` list: {args.base_chain}")
