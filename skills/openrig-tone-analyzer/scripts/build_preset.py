@@ -21,9 +21,11 @@ timbre-determining slots:
      candidate lists (`none` => that slot empty; multiple `gain` slots => a
      drive STACK). For each combo, render the FULL chain (all FIXED FX present)
      and score `weighted_spectral_proximity_pct` over the reliable range. Pick
-     the best combo. `--cab-ir` auto-inserts a `generic_ir` cab right after the
-     amp ONLY when the amp renders DIRECT, there is no researched cab already,
-     and the amp is not `:full_rig`.
+     the best combo. `--cab-model` auto-inserts a `type: cab` PLUGIN block
+     (catalog model id, whose manifest `output_gain_db` makes the level right)
+     right after the amp ONLY when the amp renders DIRECT, there is no researched
+     cab already, and the amp is not `:full_rig`. (A raw off-catalog IR is the
+     separate `generic_ir` escape, authored directly in the base chain.)
   4. EQ refine on the winner: iterate render -> `next_band_gains` (CAPPED at
      +/-6 dB, dead-top / out-of-range bands HELD at 0) -> apply, until
      within-floor / plateau / iteration cap.
@@ -53,8 +55,8 @@ without the Rust binary or large WAVs. `main()` wires the real subprocess calls.
 
 PORTABLE BY CONSTRUCTION (skill-rules LAW 1): no machine-tied paths. The
 analyzer scripts and venv resolve relative to this file (`sys.executable`,
-`Path(__file__)`); the render binary, DI, plugins root and cab IR are CLI/env
-inputs only (they live in the OpenRig app / OpenRig-plugins, whose clone
+`Path(__file__)`); the render binary, DI, plugins root and cab model id are
+CLI/env inputs only (they live in the OpenRig app / OpenRig-plugins, whose clone
 location varies per machine).
 """
 
@@ -90,11 +92,16 @@ yaml.SafeDumper.add_multi_representer(np.integer, lambda d, v: d.represent_int(i
 # --- constants -------------------------------------------------------------
 
 EQ_MODEL = "eq_eight_band_parametric"
-CAB_IR_MODEL = "generic_ir"
+# The off-catalog raw-IR loader (`type: ir`). It loads a RAW wav and applies NO
+# catalog normalization -- it is the explicit escape for a genuinely off-catalog
+# IR, NEVER the default cab. A catalog cab is a `type: cab` PLUGIN block (see
+# cab_block), whose manifest carries the per-capture `output_gain_db` the render
+# applies so the cab level is right.
+GENERIC_IR_MODEL = "generic_ir"
 # The render-consumable param key that points a generic_ir block at a wav file.
 # Verified against the OpenRig source (crates/block-ir/src/ir_generic_ir.rs:
 # file_path_parameter("file", ...) / required_string(params, "file")).
-CAB_IR_FILE_KEY = "file"
+GENERIC_IR_FILE_KEY = "file"
 
 # block `type` strings (OpenRig EFFECT_TYPE_*). A drive/overdrive pedal is the
 # `gain` family; a head-only amp is `amp`; a full-rig capture (cab baked in) is
@@ -108,12 +115,19 @@ TYPE_FULL_RIG = "full_rig"
 TYPE_IR = "ir"
 TYPE_FILTER = "filter"
 
-# Core, head-style timbre slots that the `--cab-ir` direct-capture rule may sit
-# a cab after. An acoustic `body` core is searched like an amp but is NEVER
+# Core, head-style timbre slots that the `--cab-model` direct-capture rule may
+# sit a cab after. An acoustic `body` core is searched like an amp but is NEVER
 # given a guitar cab.
 CAB_ANCHOR_TYPES = {TYPE_AMP, TYPE_PREAMP}
+# The timbre-determining CORE is identified by TYPE, never by the presence of a
+# `candidates:` list. A `type: amp/preamp/body` block is the core whether it is
+# PINNED (a fixed `model:` -> a single variant used verbatim) or SEARCHED (a
+# `candidates:` list). The number REGULATES the core (EQ trim, gain-axis when
+# given as candidates, drive, cab, level) -- it never swaps a PINNED amp model.
+CORE_TYPES = {TYPE_AMP, TYPE_PREAMP, TYPE_BODY}
 # Block types that count as a researched cab already in the chain (so the
-# `--cab-ir` auto-insert is suppressed -- never double a cabinet).
+# `--cab-model` auto-insert is suppressed -- never double a cabinet). A `type:
+# cab` catalog plugin OR an off-catalog `type: ir` raw loader both count.
 RESEARCHED_CAB_TYPES = {TYPE_CAB, TYPE_IR}
 
 # Blocks the chain must NEVER emit: a brickwall limiter or a volume block. They
@@ -197,13 +211,30 @@ def amp_block(model: str, block_type: str = TYPE_AMP) -> dict:
     return {"type": block_type, "model": model, "enabled": True, "params": {}}
 
 
-def cab_block(ir_path: str | os.PathLike) -> dict:
-    """A cab IR loaded through the portable `generic_ir` loader (params.file)."""
+def cab_block(cab_model: str) -> dict:
+    """A cab PLUGIN block (`type: cab`) referencing a catalog cab model id (e.g.
+    `ir_marshall_4x12_v30`). The render loads the plugin and APPLIES its
+    per-capture `output_gain_db`, so the cab comes in at the correct level. This
+    is the auto-insert mechanism (`--cab-model`) -- NOT a raw-IR loader.
+    """
+    return {"type": TYPE_CAB, "model": str(cab_model), "enabled": True, "params": {}}
+
+
+def generic_ir_block(ir_path: str | os.PathLike) -> dict:
+    """A RAW IR wav loaded through the portable `generic_ir` loader (params.file).
+
+    OFF-CATALOG ESCAPE ONLY. `generic_ir` applies NO catalog `output_gain_db`, so
+    a raw wav comes in un-normalized (~18 dB hotter than a catalog cab plugin) --
+    it must NEVER stand in for a catalog cab. Use it only for a genuinely
+    off-catalog IR the user supplies as a wav; the agent authors this block
+    directly in the base chain (it is then a FIXED researched cab). The
+    auto-insert path uses `cab_block` (a `type: cab` plugin), never this.
+    """
     return {
         "type": TYPE_IR,
-        "model": CAB_IR_MODEL,
+        "model": GENERIC_IR_MODEL,
         "enabled": True,
-        "params": {CAB_IR_FILE_KEY: str(ir_path)},
+        "params": {GENERIC_IR_FILE_KEY: str(ir_path)},
     }
 
 
@@ -234,14 +265,16 @@ def assemble_blocks(
     drive_models: list[str],
     amp_model: str,
     amp_type: str = TYPE_AMP,
-    cab_ir: str | os.PathLike | None = None,
+    cab_model: str | None = None,
 ) -> list[dict]:
     """Build the flat chain `drive(s) -> amp -> cab -> EQ`.
 
     - each drive model becomes one `gain` block, in order; the literal token
       `none` (or a falsy model) is omitted (amp-only);
-    - the cab IR is added ONLY when `cab_ir` is given AND the amp is not a
-      full-rig capture (a full_rig already contains the cab -- never double it);
+    - the cab is a `type: cab` PLUGIN block (catalog model id) added ONLY when
+      `cab_model` is given AND the amp is not a full-rig capture (a full_rig
+      already contains the cab -- never double it). The plugin's `output_gain_db`
+      makes the level right;
     - the chain ENDS at the EQ: no limiter, no volume block is ever appended.
     """
     blocks: list[dict] = []
@@ -249,8 +282,8 @@ def assemble_blocks(
         if m and m != "none":
             blocks.append(drive_block(m))
     blocks.append(amp_block(amp_model, amp_type))
-    if cab_ir is not None and amp_type != TYPE_FULL_RIG:
-        blocks.append(cab_block(cab_ir))
+    if cab_model is not None and amp_type != TYPE_FULL_RIG:
+        blocks.append(cab_block(cab_model))
     blocks.append(flat_eq_block())
     return blocks
 
@@ -321,11 +354,32 @@ def strip_forbidden(blocks: list[dict]) -> list[dict]:
     return [copy.deepcopy(b) for b in blocks if not is_forbidden(b)]
 
 
+def pinned_core_candidate(block: dict) -> str | dict:
+    """Synthesize the SINGLE search candidate for a PINNED core (a `type:
+    amp/preamp/body` block with a fixed `model:` and no `candidates:`).
+
+    The pinned amp is the artist's actual amp, authored verbatim -- it is used
+    as-is, never swapped. When the block carries `params:` (e.g. a fixed gain
+    axis), they ride along as the candidate's per-candidate params so they land
+    on the emitted block AND are recorded in the report; otherwise a bare model
+    string (default params)."""
+    model = block.get("model")
+    params = block.get("params") or {}
+    if params:
+        return {"model": model, "params": dict(params)}
+    return model
+
+
 def classify_chain(blocks: list[dict]) -> list[Slot]:
     """Classify a flat base chain (signal order preserved) into SEARCH / TUNE /
     FIXED slots, dropping any forbidden (`limiter_brickwall` / `volume`) block.
 
-    - a block carrying a non-empty `candidates:` list => SEARCH (optimized);
+    - the CORE is identified by TYPE: a `type: amp/preamp/body` block is SEARCH
+      whether it is PINNED (a fixed `model:` -> a single synthesized variant,
+      used verbatim but still the cabbable/recorded core) or SEARCHED (a
+      `candidates:` list of gain-axis or stand-in variants);
+    - any other block carrying a non-empty `candidates:` list (e.g. a `gain` or
+      `cab` SEARCH slot) => SEARCH (optimized);
     - the `eq_eight_band_parametric` filter (no candidates) => TUNE (trimmed);
     - everything else (dynamics, wah, pitch, mod, delay, reverb, a non-EQ
       filter, a researched cab, ...) => FIXED pass-through, preserved verbatim.
@@ -335,6 +389,10 @@ def classify_chain(blocks: list[dict]) -> list[Slot]:
         cands = b.get("candidates")
         if cands:
             slots.append(Slot(ROLE_SEARCH, b, list(cands)))
+        elif b.get("type") in CORE_TYPES:
+            # PINNED core: a fixed-model amp/preamp/body, still the searchable,
+            # cabbable, recorded core -- a single synthesized candidate.
+            slots.append(Slot(ROLE_SEARCH, b, [pinned_core_candidate(b)]))
         elif b.get("type") == TYPE_FILTER and b.get("model") == EQ_MODEL:
             slots.append(Slot(ROLE_TUNE, b, None))
         else:
@@ -483,19 +541,19 @@ def coarse_hold_mask(ref_8band_ltas, reliable_range_hz) -> np.ndarray:
 
 # --- gear search (render/measure injected) ---------------------------------
 
-def decide_cab(amp_model, amp_type, cab_ir, measure_fn):
+def decide_cab(amp_model, amp_type, cab_model, measure_fn):
     """Decide whether an amp needs a cab. A full_rig capture NEVER does (and is
     never measured). Otherwise render the amp alone (flat EQ, no drive, no cab)
     and check the top-octave excess.
 
     `measure_fn(blocks) -> fine_ltas` renders the blocks through the DI and
-    returns the wet 1/3-octave LTAS. Returns (direct: bool, cab_or_None).
+    returns the wet 1/3-octave LTAS. Returns (direct: bool, cab_model_or_None).
     """
-    if amp_type == TYPE_FULL_RIG or cab_ir is None:
+    if amp_type == TYPE_FULL_RIG or cab_model is None:
         return False, None
-    amp_only = assemble_blocks([], amp_model, amp_type=amp_type, cab_ir=None)
+    amp_only = assemble_blocks([], amp_model, amp_type=amp_type, cab_model=None)
     direct = is_direct_capture(measure_fn(amp_only))
-    return direct, (cab_ir if direct else None)
+    return direct, (cab_model if direct else None)
 
 
 def _proximity(ref_fine, wet_fine) -> float:
@@ -577,7 +635,7 @@ def search_chain(
     slots: list[Slot],
     ref_fine_ltas,
     measure_fn,
-    cab_ir=None,
+    cab_model=None,
     score_fn=None,
     flat_eq: dict | None = None,
 ) -> dict:
@@ -585,11 +643,12 @@ def search_chain(
     full chain with the best spectral proximity to the reference.
 
     Each combo renders the FULL chain (all FIXED FX in place, flat EQ). The
-    `--cab-ir` is auto-inserted right after the amp ONLY when the amp renders
-    DIRECT, there is no researched cab already, and the amp is not `:full_rig`.
-    `measure_fn(blocks) -> fine_ltas` renders+measures; `score_fn(ref, wet)`
-    scores proximity (defaults to the energy-weighted, reliable-range metric).
-    Returns the winning chain, the chosen gear, and the ranked history.
+    `--cab-model` cab (a `type: cab` plugin) is auto-inserted right after the amp
+    ONLY when the amp renders DIRECT, there is no researched cab already, and the
+    amp is not `:full_rig`. `measure_fn(blocks) -> fine_ltas` renders+measures;
+    `score_fn(ref, wet)` scores proximity (defaults to the energy-weighted,
+    reliable-range metric). Returns the winning chain, the chosen gear, and the
+    ranked history.
     """
     score_fn = _proximity if score_fn is None else score_fn
     flat_eq = flat_eq_block() if flat_eq is None else flat_eq
@@ -606,10 +665,10 @@ def search_chain(
         blocks, info = _resolve_combo(slots, combo, flat_eq)
 
         direct, cab_used = False, None
-        if info["amp"] and cab_ir is not None and not info["has_researched_cab"]:
+        if info["amp"] and cab_model is not None and not info["has_researched_cab"]:
             key = (info["amp"], info["amp_type"])
             if key not in cab_cache:
-                cab_cache[key] = decide_cab(info["amp"], info["amp_type"], cab_ir, measure_fn)
+                cab_cache[key] = decide_cab(info["amp"], info["amp_type"], cab_model, measure_fn)
             direct, cab_used = cab_cache[key]
             if cab_used is not None and info["amp_pos"] is not None:
                 blocks.insert(info["amp_pos"] + 1, cab_block(cab_used))
@@ -620,7 +679,7 @@ def search_chain(
             "amp_params": dict(info["amp_params"]), "drives": list(info["drives"]),
             "drive_params": [dict(p) for p in info["drive_params"]],
             "core": info["core"], "core_params": dict(info["core_params"]),
-            "direct": direct, "cab_ir": cab_used,
+            "direct": direct, "cab_model": cab_used,
             "proximity_pct": round(prox, 2),
         }
         history.append(rec)
@@ -634,7 +693,7 @@ def search_chain(
         "amp_params": best["amp_params"], "drives": best["drives"],
         "drive_params": best["drive_params"], "core": best["core"],
         "core_params": best["core_params"], "direct": best["direct"],
-        "cab_ir": best["cab_ir"], "proximity_pct": round(best["_prox"], 2),
+        "cab_model": best["cab_model"], "proximity_pct": round(best["_prox"], 2),
         "blocks": best["blocks"], "history": history,
     }
 
@@ -730,9 +789,16 @@ def main(argv=None) -> int:
                     help="researched full-rig base-chain YAML (flat `blocks:` in signal order; "
                          "SEARCH slots carry `candidates:`, the eq_eight_band filter is TUNED)")
     ap.add_argument("--ref", required=True, help="isolated-guitar reference WAV")
-    ap.add_argument("--cab-ir", default="",
-                    help="cab IR WAV; auto-inserted after the amp ONLY when the amp renders direct "
-                         "and no researched cab is present (omit for a full-rig / cabbed base chain)")
+    ap.add_argument("--cab-model", default="",
+                    help="catalog cab PLUGIN model id (a `type: cab` plugin, e.g. ir_marshall_4x12_v30); "
+                         "auto-inserted after the amp ONLY when the amp renders direct and no researched "
+                         "cab is present (omit for a full-rig / cabbed base chain). The plugin's "
+                         "output_gain_db makes the cab level right; a raw generic_ir wav would not")
+    # BREAKING: the old `--cab-ir <wav>` loaded a RAW IR through generic_ir, which
+    # bypasses the cab plugin's per-capture output_gain_db (renders ~18 dB hot).
+    # It is replaced by `--cab-model <cab_model_id>`. Kept as a deprecated alias
+    # that ERRORS with a pointer (a raw wav must NOT be accepted as a cab model).
+    ap.add_argument("--cab-ir", default="", help=argparse.SUPPRESS)
     ap.add_argument("--render-bin", required=True, help="path to the installed openrig-render")
     ap.add_argument("--di", required=True, help="bundled DI WAV (assets/audio/input.wav)")
     ap.add_argument("--plugins-root", default="",
@@ -746,6 +812,16 @@ def main(argv=None) -> int:
     ap.add_argument("--max-iters", type=int, default=6)
     args = ap.parse_args(argv)
 
+    if args.cab_ir:
+        raise SystemExit(
+            "--cab-ir is removed: it loaded a RAW IR through generic_ir and bypassed the "
+            "cab plugin's per-capture output_gain_db (renders ~18 dB hot). Use "
+            "--cab-model <cab_model_id> with a catalog `type: cab` plugin (e.g. "
+            "ir_marshall_4x12_v30) so the render applies the manifest output_gain_db. For a "
+            "genuinely off-catalog IR, author a {type: ir, model: generic_ir, params:{file}} "
+            "block directly in the base chain instead."
+        )
+
     # Parse the base chain and classify its slots (forbidden blocks stripped).
     base = load_yaml(args.base_chain) or {}
     raw_blocks = base.get("blocks") or []
@@ -754,7 +830,7 @@ def main(argv=None) -> int:
     slots = classify_chain(raw_blocks)
     preset_id = args.id or base.get("id") or "preset"
     name = args.name or base.get("name") or preset_id
-    cab_ir = args.cab_ir or None
+    cab_model = args.cab_model or None
     fixed_fx = [
         {"type": s.block.get("type"), "model": s.block.get("model")}
         for s in slots if s.role == ROLE_FIXED
@@ -809,7 +885,7 @@ def main(argv=None) -> int:
     hold_mask = coarse_hold_mask(ref_8band, reliable_range)
 
     # 2-3. Search the timbre slots (full chain rendered each combo).
-    search = search_chain(slots, ref_fine, measure_blocks, cab_ir=cab_ir)
+    search = search_chain(slots, ref_fine, measure_blocks, cab_model=cab_model)
     print(f"gear: amp={search['amp']} ({search['amp_type']}) drives={search['drives']} "
           f"core={search['core']} direct={search['direct']} proximity={search['proximity_pct']:.2f}")
 
@@ -853,7 +929,7 @@ def main(argv=None) -> int:
         "core": search["core"],
         "core_params": search["core_params"],
         "direct": search["direct"],
-        "cab_ir": search["cab_ir"],
+        "cab_model": search["cab_model"],
         "fixed_fx_preserved": fixed_fx,
         "param_provenance": param_provenance_report(slots),
         "proximity_pct": search["proximity_pct"],

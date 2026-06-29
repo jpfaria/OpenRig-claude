@@ -27,38 +27,51 @@ line. Open the PNGs to inspect; feed the JSON to your downstream consumer.
 `eq_match.py` is a pure measurement step (no rig, no network): given the
 reference, the wet render, and the EQ's current 8 band gains, it emits the
 next gains (`new_gains`) that move the render's normalised LTAS shape
-toward the reference, plus `total_gap_db`. The `openrig-tone-builder` Step
-6.3 loop applies the gains, re-renders, and repeats until the gap plateaus.
+toward the reference, plus `total_gap_db`. `build_preset.py`'s internal
+refine loop applies the gains (capped ±6, dead-top bands held), re-renders,
+and repeats until `within` / plateau / the iteration cap.
 
 `build_preset.py` is the deterministic **FORM** of the openrig-tone-builder
 skill as ONE portable tool: it builds **ONE tone per run** (never a batch),
 entirely **offline**, from a surviving reference. The caller researches the
 **COMPLETE** rig (compressor, wah, pitch, modulation, delay, reverb, acoustic
 body — every researched element) and passes it as a **base-chain YAML**: a flat
-`blocks:` list in signal order. Each block the tool should SEARCH carries a
-`candidates:` list instead of a fixed `model`; the ONE `eq_eight_band_parametric`
-filter is the slot the tool TUNES; every other researched block is preserved
-**verbatim, in place**. The loop:
+`blocks:` list in signal order. The timbre-determining **CORE** (a `type:
+amp`/`preamp`/`body` block) is recognised **by its type**, whether it is
+**PINNED** (a fixed `model:` — the artist's actual amp, used verbatim) or
+**SEARCHED** (a `candidates:` list of gain-axis or stand-in variants). Other
+slots the tool should search (`gain` drives, a `cab`) carry a `candidates:` list
+instead of a fixed `model`; the ONE `eq_eight_band_parametric` filter is the slot
+the tool TUNES; every other researched block is preserved **verbatim, in place**.
+The loop:
 
 1. measures the reference **once** — the honest `fingerprint_match_target`
    (reliable range/mask + per-song `self_floor_pct` BAR) and the 1/3-octave
    LTAS target;
-2. **classifies the base chain** — **SEARCH** (the `preamp`/`amp`/`body` core +
-   `gain` drive(s) + `cab`, i.e. the blocks carrying `candidates:`), **TUNE**
-   (the `eq_eight_band_parametric` filter), and **FIXED** pass-through
+2. **classifies the base chain** — **SEARCH** (the `preamp`/`amp`/`body` core —
+   identified **by type**, whether PINNED to a fixed `model:` or given a
+   `candidates:` list — plus the `gain` drive(s) + `cab` carrying `candidates:`),
+   **TUNE** (the `eq_eight_band_parametric` filter), and **FIXED** pass-through
    (`dynamics`/`wah`/`pitch`/`mod`/`delay`/`reverb`/any non-EQ filter/a
-   researched cab — kept verbatim, never dropped, reordered, or re-voiced);
+   researched cab — kept verbatim, never dropped, reordered, or re-voiced). A
+   **PINNED** core is a single variant used verbatim, but still the
+   direct-detected, cabbable, **recorded** core — the number REGULATES it (EQ
+   trim, gain-axis when given as candidates, drive, cab, level) but NEVER swaps a
+   pinned amp **model**;
 3. **gear search** — enumerates the cartesian product over the SEARCH slots'
    candidate lists (the literal `none` keeps that slot **empty**; multiple
    `gain` slots search a drive **stack**). For each combo it renders the **full
    chain** (all FIXED FX present) and scores `weighted_spectral_proximity_pct`
-   over the reliable range; the best combo wins. `--cab-ir` auto-inserts a
-   `generic_ir` cab right after the amp **only** when the amp renders **direct**
-   (head-only, top octave within ~15 dB of the body), there is no researched cab
-   already, and the amp is not `:full_rig` (a full-rig capture already has the cab);
+   over the reliable range; the best combo wins. `--cab-model` auto-inserts a
+   **`type: cab` PLUGIN block** (a catalog cab model id, e.g.
+   `ir_marshall_4x12_v30`) right after the amp **only** when the amp renders
+   **direct** (head-only, top octave within ~15 dB of the body), there is no
+   researched cab already, and the amp is not `:full_rig` (a full-rig capture
+   already has the cab). The cab plugin's manifest carries a per-capture
+   `output_gain_db` that the render **applies**, so the cab level is right;
 4. **EQ refine** on the winner — a **gentle TRIM capped at ±6 dB** (not the old
    ±24); the dead-top and out-of-range bands are **held at 0**. Iterates until
-   `within_floor` / plateau / iteration cap;
+   the report's `within` is true / plateau / iteration cap;
 5. **headroom** — sets the EQ `output_db` so the DI peak lands ~ −7 dBFS.
 
 ⛔ **The chain ends at the EQ** — `build_preset` adds **NO brickwall limiter and
@@ -72,8 +85,14 @@ when it cannot build a block (it logs `ignoring unsupported or invalid block` /
 captures the render output and treats those markers as a **hard failure** — a
 typo'd or uninstalled model id can never silently ship a preset missing a block.
 
-The cab IR loads through the portable `generic_ir` block, whose wav is the
-`params.file` key (`type: ir, model: generic_ir`). It drives the **installed**
+The auto-inserted cab is a **`type: cab` plugin block** (`--cab-model <cab_model_id>`):
+the render loads the cab plugin and **applies its per-capture `output_gain_db`**, so
+the cab comes in at the correct level. A raw `generic_ir` block (`type: ir, model:
+generic_ir`, wav in `params.file`) is the **off-catalog escape only** — it bypasses
+the catalog `output_gain_db` (a raw wav lands ~18 dB hot relative to the normalised
+plugin), so it must **never** stand in for a catalog cab. Use it only for a genuinely
+off-catalog IR the user supplies as a wav, authored directly in the base chain (it is
+then a FIXED researched cab). It drives the **installed**
 `openrig-render` (the headless renderer OpenRig ships next to the GUI, issue
 #741) — same engine as the live rig, no `--mcp`, no live runtime. Point
 `--render-bin` and `--di` at the install; the binary auto-resolves the bundled
@@ -92,8 +111,8 @@ blocks:
     provenance: unverified    # default knobs, no documented source -> surfaced
   - type: gain                # SEARCH the drive ('none' = try the slot empty)
     candidates: [none, nam_ibanez_ts9_a2, nam_proco_rat_a2]
-  - type: amp                 # SEARCH the amp (':full_rig' candidate => no cab)
-    candidates: [nam_marshall_1959_slp_a2, nam_marshall_jcm_800_a2]
+  - type: amp                 # PINNED core: the artist's actual amp, fixed model
+    model: nam_marshall_1959_slp_a2   # used verbatim; the number never swaps it
   - type: filter              # the corrective EQ the tool TUNES (starts flat)
     model: eq_eight_band_parametric
   - type: delay               # FIXED pass-through (time from tempo math)
@@ -104,6 +123,31 @@ blocks:
     model: hall
     params: { mix: 14 }       # no `provenance:` key -> reported as `unverified`
 ```
+
+### Pinning the artist's actual amp (the CORE is identified by type)
+
+The proximity number is **too weak to discriminate amp MODELS**: on a real John
+Mayer "Gravity" run a generic Fender (`nam_fender_deluxe_reverb_a2`, 67.81 %) beat
+the artist's actual Dumble (`nam_dumble_ods_john_mayer_a2`, 66.10 %) by ~1.7 % —
+inside the noise. So the agent **PINS** the artist's actual amp as a single fixed
+`model:`, and the number only **REGULATES** (EQ trim, gain-axis, drive, cab,
+level) — it never swaps the model:
+
+```yaml
+- type: amp                          # a PINNED core: fixed model, NO candidates
+  model: nam_dumble_ods_john_mayer_a2
+```
+
+A `type: amp`/`preamp`/`body` block is the CORE **whether pinned or searched** —
+it is recognised by its **type**, not by the presence of `candidates:`. A pinned
+core is the **full** core: direct-detection runs, `--cab-model` auto-inserts a cab
+when the amp renders direct (a `body` core is never cabbed), and it is recorded as
+the chosen amp/core in the report — it is **never** a FIXED pass-through. To
+regulate the pinned amp's drive, give the **same** model as gain-axis candidates
+(see below): two `gain` values of one model are two variants, so the number picks
+the louder/cleaner without ever choosing a different amp. Reserve a multi-model
+`candidates:` list for the genuine **stand-in** case (no capture of the artist's
+exact amp exists yet).
 
 ### Param-bearing search candidates (`{model, params}`)
 
@@ -173,12 +217,14 @@ as if it were sourced. The proximity number never optimizes a FIXED FX param
 .venv/bin/python scripts/build_preset.py \
   --base-chain /path/to/eval/<song>/chains/rhythm.yaml \
   --ref        /path/to/eval/<song>/refs/rhythm.wav \
-  --cab-ir     /path/to/irs/mesa_4x12_v30.wav \
+  --cab-model  ir_mesa_os_4x12_v30 \
   --render-bin /Applications/OpenRig.app/Contents/MacOS/openrig-render \
   --di         /Applications/OpenRig.app/Contents/Resources/assets/audio/input.wav \
   --out-preset /path/to/eval/<song>/presets/rhythm.yaml \
   --name "Song (rhythm)" --id song-rhythm
-# --cab-ir is optional: omit it for a full-rig / already-cabbed base chain.
+# --cab-model is a catalog `type: cab` model id (NOT a wav); the render applies its
+# output_gain_db so the level is right. Optional: omit for a full-rig / cabbed base
+# chain. (The old --cab-ir <wav> is removed — it bypassed the cab normalization.)
 # --name/--id default to the base chain's own `name`/`id`.
 # Linux install: --render-bin /usr/bin/openrig-render
 #                --di         /usr/share/openrig/assets/audio/input.wav

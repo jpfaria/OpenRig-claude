@@ -53,8 +53,22 @@ def test_amp_block_full_rig_type():
     assert b["type"] == "full_rig"
 
 
-def test_cab_block_uses_generic_ir_with_file_param():
-    b = bp.cab_block("/abs/cab4x12.wav")
+def test_cab_block_is_a_cab_plugin_block():
+    # the auto-insert cab is a `type: cab` PLUGIN block referencing a catalog cab
+    # model id -> the render loads the plugin and applies its per-capture
+    # output_gain_db, so the level is correct. It is NOT a raw generic_ir wav.
+    b = bp.cab_block("ir_marshall_4x12_v30")
+    assert b["type"] == "cab"
+    assert b["model"] == "ir_marshall_4x12_v30"
+    assert b["enabled"] is True
+    assert b["params"] == {}
+
+
+def test_generic_ir_block_is_off_catalog_raw_wav_escape():
+    # the OFF-CATALOG escape: a RAW IR wav through the generic_ir loader
+    # (params.file). It bypasses any catalog output_gain_db -> ONLY for a
+    # genuinely off-catalog IR, NEVER a stand-in for a catalog cab.
+    b = bp.generic_ir_block("/abs/cab4x12.wav")
     assert b["type"] == "ir"
     assert b["model"] == "generic_ir"
     # the param key that points generic_ir at a wav is "file" (verified against
@@ -64,42 +78,47 @@ def test_cab_block_uses_generic_ir_with_file_param():
 
 def test_assemble_blocks_drive_amp_cab_eq_in_order():
     blocks = bp.assemble_blocks(["nam_od_a1"], "nam_amp_a1", amp_type="amp",
-                                cab_ir="/abs/cab.wav")
+                                cab_model="ir_marshall_4x12_v30")
     types = [b["type"] for b in blocks]
-    assert types == ["gain", "amp", "ir", "filter"]
+    assert types == ["gain", "amp", "cab", "filter"]
     # chain ENDS at the EQ filter
     assert blocks[-1]["model"] == bp.EQ_MODEL
 
 
 def test_assemble_blocks_none_drive_is_omitted():
-    blocks = bp.assemble_blocks(["none"], "nam_amp_a1", cab_ir=None)
+    blocks = bp.assemble_blocks(["none"], "nam_amp_a1", cab_model=None)
     types = [b["type"] for b in blocks]
     assert "gain" not in types
     assert types == ["amp", "filter"]
 
 
 def test_assemble_blocks_stacks_multiple_drives_in_order():
-    blocks = bp.assemble_blocks(["a", "b"], "amp1", cab_ir=None)
+    blocks = bp.assemble_blocks(["a", "b"], "amp1", cab_model=None)
     gains = [b["model"] for b in blocks if b["type"] == "gain"]
     assert gains == ["a", "b"]
 
 
 def test_assemble_blocks_full_rig_never_gets_a_cab():
     blocks = bp.assemble_blocks([], "nam_rig_a1", amp_type="full_rig",
-                                cab_ir="/abs/cab.wav")
+                                cab_model="ir_marshall_4x12_v30")
     types = [b["type"] for b in blocks]
-    assert "ir" not in types          # full_rig already has the cab
+    assert "cab" not in types         # full_rig already has the cab
+    assert "ir" not in types
     assert types == ["full_rig", "filter"]
 
 
-def test_assemble_blocks_direct_amp_gets_a_cab():
+def test_assemble_blocks_direct_amp_gets_a_cab_plugin_not_generic_ir():
     blocks = bp.assemble_blocks([], "nam_amp_a1", amp_type="amp",
-                                cab_ir="/abs/cab.wav")
-    assert any(b["type"] == "ir" and b["model"] == "generic_ir" for b in blocks)
+                                cab_model="ir_marshall_4x12_v30")
+    # the auto-inserted cab is a `type: cab` plugin block (applies output_gain_db)
+    assert any(b["type"] == "cab" and b["model"] == "ir_marshall_4x12_v30"
+               for b in blocks)
+    # and NEVER a raw generic_ir wav (that would skip the catalog normalization)
+    assert not any(b.get("model") == "generic_ir" for b in blocks)
 
 
 def test_chain_has_no_limiter_and_no_volume_block():
-    blocks = bp.assemble_blocks(["od"], "amp1", cab_ir="/abs/cab.wav")
+    blocks = bp.assemble_blocks(["od"], "amp1", cab_model="ir_marshall_4x12_v30")
     models = [b.get("model") for b in blocks]
     types = [b["type"] for b in blocks]
     assert "limiter_brickwall" not in models
@@ -109,7 +128,7 @@ def test_chain_has_no_limiter_and_no_volume_block():
 
 
 def test_make_preset_shape():
-    blocks = bp.assemble_blocks([], "amp1", cab_ir=None)
+    blocks = bp.assemble_blocks([], "amp1", cab_model=None)
     p = bp.make_preset("slug", "Display Name", blocks)
     assert p["id"] == "slug"
     assert p["name"] == "Display Name"
@@ -150,7 +169,7 @@ def test_parse_candidate_dict_without_params_is_empty():
 # --- EQ grid / gains / cap -------------------------------------------------
 
 def _preset_with_eq() -> dict:
-    blocks = bp.assemble_blocks([], "amp1", cab_ir=None)
+    blocks = bp.assemble_blocks([], "amp1", cab_model=None)
     return bp.make_preset("demo", "Demo", blocks)
 
 
@@ -226,20 +245,20 @@ def test_decide_cab_full_rig_never_gets_cab():
     def boom(_blocks):
         raise AssertionError("full_rig must not be measured for cab need")
 
-    direct, cab = bp.decide_cab("nam_rig_a1", "full_rig", "/abs/cab.wav", boom)
+    direct, cab = bp.decide_cab("nam_rig_a1", "full_rig", "ir_marshall_4x12_v30", boom)
     assert direct is False
     assert cab is None
 
 
 def test_decide_cab_direct_amp_gets_the_cab():
-    direct, cab = bp.decide_cab("nam_amp_a1", "amp", "/abs/cab.wav",
+    direct, cab = bp.decide_cab("nam_amp_a1", "amp", "ir_marshall_4x12_v30",
                                 lambda _b: _fine_ltas(4.0))
     assert direct is True
-    assert cab == "/abs/cab.wav"
+    assert cab == "ir_marshall_4x12_v30"
 
 
 def test_decide_cab_cabbed_amp_gets_no_cab():
-    direct, cab = bp.decide_cab("nam_amp_a1", "amp", "/abs/cab.wav",
+    direct, cab = bp.decide_cab("nam_amp_a1", "amp", "ir_marshall_4x12_v30",
                                 lambda _b: _fine_ltas(35.0))
     assert direct is False
     assert cab is None
@@ -430,23 +449,24 @@ def test_search_chain_full_rig_amp_gets_no_cab():
         {"type": "amp", "candidates": ["rig_amp:full_rig"]},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
-    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/cab.wav")
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_model="ir_x")
     assert res["amp"] == "rig_amp"
     assert res["amp_type"] == "full_rig"
-    assert res["cab_ir"] is None
+    assert res["cab_model"] is None
+    assert not any(b["type"] == "cab" for b in res["blocks"])
     assert not any(b["type"] == "ir" for b in res["blocks"])
     # the chosen block carries the real full_rig type
     assert any(b["type"] == "full_rig" and b["model"] == "rig_amp" for b in res["blocks"])
 
 
-def test_search_chain_direct_amp_inserts_cab_right_after_amp():
+def test_search_chain_direct_amp_inserts_cab_plugin_right_after_amp():
     ref = _fine_ltas(20.0)
 
     def measure_fn(blocks):
         models = [b.get("model") for b in blocks]
         types = [b["type"] for b in blocks]
-        # the amp-only probe (no cab IR, no drive) reads as a direct head
-        if "head_amp" in models and "ir" not in types and "gain" not in types:
+        # the amp-only probe (no cab, no drive) reads as a direct head
+        if "head_amp" in models and "cab" not in types and "gain" not in types:
             return _fine_ltas(4.0)
         return ref
 
@@ -454,20 +474,28 @@ def test_search_chain_direct_amp_inserts_cab_right_after_amp():
         {"type": "amp", "candidates": ["head_amp"]},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
-    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/cab.wav")
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn,
+                          cab_model="ir_mesa_os_4x12_v30")
     assert res["direct"] is True
-    assert res["cab_ir"] == "/abs/cab.wav"
+    assert res["cab_model"] == "ir_mesa_os_4x12_v30"
+    # the chosen cab model id is recorded in the gear history too
+    assert res["history"][0]["cab_model"] == "ir_mesa_os_4x12_v30"
     out = res["blocks"]
     types = [b["type"] for b in out]
-    assert "ir" in types
-    assert types.index("ir") == types.index("amp") + 1   # cab right after the amp
+    # the auto cab is a `type: cab` PLUGIN block (applies output_gain_db), not a
+    # raw generic_ir wav
+    assert "cab" in types
+    assert not any(b.get("model") == "generic_ir" for b in out)
+    cab = [b for b in out if b["type"] == "cab"][0]
+    assert cab["model"] == "ir_mesa_os_4x12_v30"
+    assert types.index("cab") == types.index("amp") + 1   # cab right after the amp
 
 
-def test_search_chain_researched_cab_blocks_auto_insert():
+def test_search_chain_researched_ir_cab_blocks_auto_insert():
     ref = _fine_ltas(20.0)
 
-    # a researched cab (type ir) already in the chain: even a direct amp must
-    # not get a second auto-inserted cab.
+    # an off-catalog researched cab (type ir, generic_ir) already in the chain:
+    # even a direct amp must not get a second auto-inserted cab.
     def measure_fn(blocks):
         return ref
 
@@ -476,10 +504,52 @@ def test_search_chain_researched_cab_blocks_auto_insert():
         {"type": "ir", "model": "generic_ir", "params": {"file": "/abs/researched.wav"}},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
-    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/other.wav")
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_model="ir_other")
     irs = [b for b in res["blocks"] if b["type"] == "ir"]
     assert len(irs) == 1
     assert irs[0]["params"]["file"] == "/abs/researched.wav"
+    # no auto cab plugin added either
+    assert not any(b["type"] == "cab" for b in res["blocks"])
+    assert res["cab_model"] is None
+
+
+def test_search_chain_researched_cab_plugin_blocks_auto_insert():
+    ref = _fine_ltas(20.0)
+
+    # a researched `type: cab` plugin already FIXED in the chain: a direct amp
+    # must not get a second auto-inserted cab.
+    blocks = [
+        {"type": "amp", "candidates": ["head_amp"]},
+        {"type": "cab", "model": "ir_marshall_1960av_4x12", "params": {}},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, lambda b: ref,
+                          cab_model="ir_other")
+    cabs = [b for b in res["blocks"] if b["type"] == "cab"]
+    assert len(cabs) == 1
+    assert cabs[0]["model"] == "ir_marshall_1960av_4x12"
+    assert res["cab_model"] is None
+
+
+def test_search_chain_cab_search_slot_searches_cab_plugins():
+    ref = _fine_ltas(20.0)
+
+    # a base-chain `type: cab` SEARCH slot: the tool searches the cab plugins and
+    # picks the best one (and never auto-inserts a second cab on top).
+    def measure_fn(blocks):
+        cabs = [b for b in blocks if b["type"] == "cab"]
+        return ref if (cabs and cabs[0]["model"] == "ir_good") else ref + 12.0
+
+    blocks = [
+        {"type": "amp", "candidates": ["amp_a"]},
+        {"type": "cab", "candidates": ["ir_good", "ir_bad"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_model="ir_auto")
+    chosen = [b for b in res["blocks"] if b["type"] == "cab"]
+    assert len(chosen) == 1               # no auto-insert double cab
+    assert chosen[0]["model"] == "ir_good"
+    assert res["cab_model"] is None       # the auto-insert path did not fire
 
 
 def test_search_chain_body_core_searched_like_amp_and_never_cabbed():
@@ -493,9 +563,10 @@ def test_search_chain_body_core_searched_like_amp_and_never_cabbed():
         {"type": "body", "candidates": ["body_good", "body_bad"]},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
-    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_ir="/abs/cab.wav")
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_model="ir_x")
     assert res["core"] == "body_good"
-    # an acoustic body core never gets a guitar cab, even with --cab-ir given
+    # an acoustic body core never gets a guitar cab, even with --cab-model given
+    assert not any(b["type"] == "cab" for b in res["blocks"])
     assert not any(b["type"] == "ir" for b in res["blocks"])
 
 
@@ -621,10 +692,11 @@ def test_search_chain_dict_full_rig_true_skips_cab_like_suffix():
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
     res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref,
-                          cab_ir="/abs/cab.wav")
+                          cab_model="ir_x")
     assert res["amp"] == "rig_amp"
     assert res["amp_type"] == "full_rig"
-    assert res["cab_ir"] is None
+    assert res["cab_model"] is None
+    assert not any(b["type"] == "cab" for b in res["blocks"])
     assert not any(b["type"] == "ir" for b in res["blocks"])
     assert any(b["type"] == "full_rig" and b["model"] == "rig_amp" for b in res["blocks"])
 
@@ -644,6 +716,147 @@ def test_search_chain_none_still_yields_empty_slot_alongside_dicts():
     assert res["drives"] == []
     assert res["drive_params"] == []
     assert not any(b["type"] == "gain" for b in res["blocks"])
+
+
+# --- pinned core (fixed model = CORE, no `candidates:` needed) --------------
+# The CORE is identified by TYPE (amp/preamp/body), NOT by the presence of a
+# `candidates:` list. A fixed-model core is PINNED: a single variant used
+# verbatim, but still the searchable/cabbable core. The number REGULATES (EQ,
+# gain-axis, drive, cab, level) -- it never swaps a pinned amp MODEL.
+
+def test_classify_chain_pinned_amp_is_core_not_fixed():
+    # a `type: amp` block with a fixed model and NO candidates is the CORE
+    # (ROLE_SEARCH), never a FIXED pass-through.
+    blocks = [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    slots = bp.classify_chain(blocks)
+    assert [s.role for s in slots] == ["search", "tune"]
+
+
+def test_classify_chain_pinned_preamp_and_body_are_core_not_fixed():
+    blocks = [
+        {"type": "preamp", "model": "nam_preamp_x"},
+        {"type": "body", "model": "nam_body_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    assert [s.role for s in bp.classify_chain(blocks)] == ["search", "search", "tune"]
+
+
+def test_search_chain_pinned_amp_is_core_with_direct_cab_and_recorded():
+    # the John Mayer "Gravity" case: the artist's actual amp is PINNED as a
+    # single fixed model. It must be the CORE -> direct-detection runs, the
+    # --cab-model cab auto-inserts when direct, the emitted amp is exactly that
+    # model, the report records it as the chosen amp, and it is not dropped.
+    ref = _fine_ltas(20.0)
+
+    def measure_fn(blocks):
+        models = [b.get("model") for b in blocks]
+        types = [b["type"] for b in blocks]
+        # the amp-only probe (no cab, no drive) reads as a direct head
+        if ("nam_dumble_ods_john_mayer_a2" in models
+                and "cab" not in types and "gain" not in types):
+            return _fine_ltas(4.0)
+        return ref
+
+    blocks = [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn,
+                          cab_model="ir_mesa_os_4x12_v30")
+    assert res["amp"] == "nam_dumble_ods_john_mayer_a2"
+    assert res["amp_type"] == "amp"
+    assert res["direct"] is True
+    assert res["cab_model"] == "ir_mesa_os_4x12_v30"
+    # a single pinned variant -> exactly one combo searched, never swapped
+    assert len(res["history"]) == 1
+    out = res["blocks"]
+    amps = [b for b in out if b["type"] == "amp"]
+    assert len(amps) == 1 and amps[0]["model"] == "nam_dumble_ods_john_mayer_a2"
+    types = [b["type"] for b in out]
+    assert types.index("cab") == types.index("amp") + 1   # cab right after amp
+
+
+def test_search_chain_pinned_amp_with_params_lands_on_block_and_report():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "amp", "model": "amp_x", "params": {"gain": 6}},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn=lambda b: ref)
+    amp = [b for b in res["blocks"] if b["type"] == "amp"][0]
+    assert amp["model"] == "amp_x"
+    assert amp["params"] == {"gain": 6}
+    assert res["amp_params"] == {"gain": 6}
+
+
+def test_search_chain_pinned_preamp_is_core():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "preamp", "model": "nam_preamp_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, lambda b: ref, cab_model=None)
+    assert res["amp"] == "nam_preamp_x"
+    assert res["amp_type"] == "preamp"
+
+
+def test_search_chain_pinned_body_core_is_searched_and_never_cabbed():
+    ref = _fine_ltas(20.0)
+    blocks = [
+        {"type": "body", "model": "nam_body_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, lambda b: ref, cab_model="ir_x")
+    assert res["core"] == "nam_body_x"
+    # a body core is never given a guitar cab even with --cab-model present
+    assert not any(b["type"] == "cab" for b in res["blocks"])
+    assert not any(b["type"] == "ir" for b in res["blocks"])
+
+
+def test_search_chain_pinned_amp_gain_axis_picks_higher_never_swaps_model():
+    # pinned-but-gain-regulated: ONE model, two gain variants given as
+    # candidates. The number picks the higher-proximity gain but never a
+    # different amp model.
+    ref = _fine_ltas(20.0)
+
+    def measure_fn(blocks):
+        amp = [b for b in blocks if b["type"] == "amp"]
+        if amp and amp[0]["params"].get("gain") == 8:
+            return ref
+        return ref + 12.0
+
+    blocks = [
+        {"type": "amp", "candidates": [
+            {"model": "nam_dumble_ods_john_mayer_a2", "params": {"gain": 5}},
+            {"model": "nam_dumble_ods_john_mayer_a2", "params": {"gain": 8}},
+        ]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn)
+    assert res["amp"] == "nam_dumble_ods_john_mayer_a2"
+    assert res["amp_params"] == {"gain": 8}
+    assert len(res["history"]) == 2
+
+
+def test_search_chain_multi_model_stand_in_still_searches_distinct_models():
+    # the multi-model stand-in case: 2+ distinct amp models as candidates still
+    # search as before (the number picks the best model when authorised to).
+    ref = _fine_ltas(20.0)
+
+    def measure_fn(blocks):
+        models = [b.get("model") for b in blocks]
+        return ref if "amp_good" in models else ref + 12.0
+
+    blocks = [
+        {"type": "amp", "candidates": ["amp_bad", "amp_good"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn)
+    assert res["amp"] == "amp_good"
+    assert len(res["history"]) == 2
 
 
 # --- param provenance (Rule B: sourced / derived / unverified) -------------
@@ -726,7 +939,7 @@ def test_emitted_preset_never_contains_a_provenance_key():
 # --- EQ-refine loop (injected fakes) ---------------------------------------
 
 def _winning_preset() -> dict:
-    p = bp.make_preset("demo", "Demo", bp.assemble_blocks([], "amp1", cab_ir=None))
+    p = bp.make_preset("demo", "Demo", bp.assemble_blocks([], "amp1", cab_model=None))
     bp.set_eq_grid(p)
     return p
 
