@@ -201,6 +201,15 @@ EQ_GAIN_MIN, EQ_GAIN_MAX = -6.0, 6.0
 # The gate is "within this many % of the reference's own self-floor".
 SELF_FLOOR_MARGIN_PCT = 3.0
 
+# A reference stem is DEGRADED -- a source-separated low-mid fragment that lost
+# its top octave -- when its top octave is dead OR its 85% spectral rolloff sits
+# below this cutoff. Matching such a stem's LTAS with the aggressive eq_match
+# piles low-mid and cuts the top (the "99% but muffled" failure), so the build
+# falls back to the reference-less flat-EQ / gear-driven treatment instead of
+# refining the EQ toward the degraded shape. A cleaner isolated stem (top alive,
+# rolloff above this) re-enables the full proximity search + eq_match refine.
+DEGRADED_ROLLOFF_HZ = 800.0
+
 
 # --- YAML round-trip -------------------------------------------------------
 
@@ -984,18 +993,50 @@ def main(argv=None, *, render_fn=None) -> int:
     out_preset.parent.mkdir(parents=True, exist_ok=True)
     out_report = Path(args.out_report) if args.out_report else out_preset.with_suffix(".report.json")
 
-    # REFERENCE-LESS mode -- pin the gear, leave the EQ FLAT, render NOTHING.
-    # Triggered when there is no reference to match (no --ref), OR when a render
-    # IS required (the referenced path) but no runnable render binary is available
-    # (and none injected) -- a graceful fallback instead of a crash. A generic /
-    # example preset has nothing to score and may have no openrig-render installed,
-    # so the tool must NOT blind-EQ: the researched amp + drive(s) + cab carry the
-    # tone and the EQ stays flat (every band gain 0, output_db 0) -- an un-tunable
-    # starting point until a reference WAV or ear feedback is given.
+    # REFERENCE-LESS / DEGRADED-REFERENCE mode -- pin the gear, leave the EQ FLAT,
+    # render NOTHING. Two triggers share the SAME flat-EQ / gear-driven assembly:
+    #
+    #   * REFERENCE-LESS: there is no reference to match (no --ref), OR a render IS
+    #     required but no runnable render binary is available (and none injected) --
+    #     a graceful fallback instead of a crash. A generic / example preset has
+    #     nothing to score and may have no openrig-render installed.
+    #   * DEGRADED-REFERENCE: a --ref IS present and a render IS available, but the
+    #     reference stem is DEGRADED -- a source-separated low-mid fragment that
+    #     lost its top octave (top_octave_dead, OR an 85% spectral rolloff below
+    #     DEGRADED_ROLLOFF_HZ). Running the aggressive eq_match against such a shape
+    #     piles low-mid and cuts the top (the "99% but muffled" failure), so the
+    #     EQ is left flat and the researched gear carries the tone -- validate by
+    #     ear; a cleaner isolated stem re-enables the full match.
+    #
+    # In both cases the tool must NOT blind-EQ: the researched amp + drive(s) + cab
+    # carry the tone and the EQ stays flat (every band gain 0, output_db 0).
     render_available = render_fn is not None or _render_bin_runnable(args.render_bin)
     reference_less = (not args.ref) or (not render_available)
-    if reference_less:
-        refless_reason = None if not args.ref else "no render binary"
+
+    # Measure the reference ONCE (when present): the honest fingerprint + the 85%
+    # spectral rolloff gate the degraded-reference fallback AND feed the referenced
+    # match path below. Loaded here so a degraded ref never reaches the eq_match.
+    ref_sig = ref_sr = ref_fp = None
+    degraded = False
+    degraded_evidence = None
+    if args.ref:
+        ref_sig, ref_sr = _common.load_audio(args.ref)
+        ref_fp = _common.fingerprint_match_target(ref_sig, ref_sr)
+        rolloff_hz = _common.compute_spectral_rolloff_hz(ref_sig, ref_sr)
+        degraded = bool(ref_fp["top_octave_dead"]) or float(rolloff_hz) < DEGRADED_ROLLOFF_HZ
+        if degraded:
+            degraded_evidence = {
+                "top_octave_dead": bool(ref_fp["top_octave_dead"]),
+                "rolloff_hz": round(float(rolloff_hz), 2),
+                "self_floor_pct": round(float(ref_fp["self_floor_pct"]), 2),
+                "reliable_range_hz": ref_fp["reliable_range_hz"],
+            }
+
+    if reference_less or degraded:
+        # reference_less (no ref / no render) takes precedence over degraded for the
+        # reported mode -- with no render we couldn't run the match anyway.
+        mode = "reference-less" if reference_less else "degraded-reference"
+        refless_reason = "no render binary" if (reference_less and args.ref) else None
         assembled = assemble_reference_less(slots, cab_model=cab_model)
         final = make_preset(preset_id, name, assembled["blocks"])
         set_eq_grid(final)                                  # FLAT grid, gains 0, output_db 0
@@ -1004,7 +1045,7 @@ def main(argv=None, *, render_fn=None) -> int:
         report = {
             "id": preset_id,
             "name": name,
-            "mode": "reference-less",
+            "mode": mode,
             "tunable": False,
             "amp": assembled["amp"],
             "amp_type": assembled["amp_type"],
@@ -1019,21 +1060,32 @@ def main(argv=None, *, render_fn=None) -> int:
             "param_provenance": param_provenance_report(slots),
             "lint": gate["lint"],
             "validation_warnings": gate["validation_warnings"],
-            # there is NO reference -> no proximity / within / self-floor / peak.
-            # The EQ is FLAT and level-neutral (output_db 0). This preset is an
-            # un-tunable STARTING POINT: pass a reference WAV (the referenced path)
-            # or give ear feedback to tune it.
+            # The EQ is FLAT and level-neutral (output_db 0). No reference LTAS was
+            # matched (none present, or a degraded shape that must not be chased) ->
+            # no proximity / within / refine history. An un-tunable STARTING POINT.
             "eq_output_db": 0.0,
-            "note": "Pinned gear + FLAT EQ, no render. Un-tunable starting point "
-                    "until a reference WAV or ear feedback is provided -- the agent "
-                    "never blind-EQs without something to match.",
             "preset_path": str(out_preset),
         }
-        if refless_reason:
-            report["reason"] = refless_reason
+        if degraded and not reference_less:
+            # the degradation evidence + the "why flat" note ride into the report.
+            report.update(degraded_evidence)
+            report["note"] = (
+                "the reference stem is degraded (top-dead / low-mid fragment); "
+                "matching its LTAS would darken the tone, so the EQ was left flat "
+                "and the researched gear carries the tone -- validate by ear; a "
+                "cleaner isolated stem would let the EQ-match run."
+            )
+        else:
+            report["note"] = (
+                "Pinned gear + FLAT EQ, no render. Un-tunable starting point "
+                "until a reference WAV or ear feedback is provided -- the agent "
+                "never blind-EQs without something to match."
+            )
+            if refless_reason:
+                report["reason"] = refless_reason
         out_report.write_text(json.dumps(_common.round_for_json(report), indent=2), encoding="utf-8")
         print(json.dumps({"preset": str(out_preset), "report": str(out_report),
-                          "mode": "reference-less", "tunable": False,
+                          "mode": mode, "tunable": False,
                           **({"reason": refless_reason} if refless_reason else {})}))
         return 0
 
@@ -1081,10 +1133,10 @@ def main(argv=None, *, render_fn=None) -> int:
         sig, sr = _common.load_audio(wav)
         return _common.third_octave_ltas(sig, sr)
 
-    # 1. Measure the reference ONCE.
-    ref_sig, ref_sr = _common.load_audio(args.ref)
+    # 1. Measure the reference ONCE -- already loaded + fingerprinted above (for
+    #    the degraded-reference check); a clean ref reaches here unchanged.
     ref_fine = _common.third_octave_ltas(ref_sig, ref_sr)
-    fp = _common.fingerprint_match_target(ref_sig, ref_sr)
+    fp = ref_fp
     self_floor = float(fp["self_floor_pct"])
     reliable_range = fp["reliable_range_hz"]
     from scripts.eq_match import normalized_ltas  # noqa: E402

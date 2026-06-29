@@ -1606,3 +1606,132 @@ def test_main_research_ref_no_render_binary_falls_back_to_reference_less(tmp_pat
     eq = bp.eq_block(bp.load_yaml(str(out_preset)))["params"]
     assert all(eq[f"band{i}_gain"] == 0.0 for i in range(1, 9))
     assert eq["output_db"] == 0.0
+
+
+# --- Part D: degraded-reference auto-detection ------------------------------
+# A DEGRADED reference stem -- a source-separated song stem that lost its top
+# octave and is a low-mid fragment -- must NOT drive the aggressive eq_match:
+# matching its LTAS piles low-mid and cuts the top (the "99% but muffled"
+# failure). build_preset detects it (top_octave_dead OR spectral rolloff <
+# DEGRADED_ROLLOFF_HZ) and falls back to the SAME reference-less flat-EQ /
+# gear-driven treatment -- NO proximity search, NO eq_match refine -- reporting
+# mode=degraded-reference / tunable=false plus the degradation evidence + a note.
+# The fingerprint + rolloff are INJECTED (monkeypatched) so the path is testable.
+
+def _clean_fp(**over):
+    fp = {"top_octave_dead": False, "self_floor_pct": 95.0, "reliable_range_hz": [80, 10240]}
+    fp.update(over)
+    return fp
+
+
+def test_main_degraded_top_octave_dead_ships_flat_eq_no_refine(tmp_path: Path, monkeypatch):
+    _noise = _noise_wav_factory(tmp_path)
+    _noise(tmp_path / "ref.wav")
+    _noise(tmp_path / "di.wav")
+    # top octave dead alone => degraded (the Gravity case), even with a fine rolloff
+    monkeypatch.setattr(bp._common, "fingerprint_match_target",
+                        lambda sig, sr: _clean_fp(top_octave_dead=True, self_floor_pct=88.0,
+                                                  reliable_range_hz=[80, 2560]))
+    monkeypatch.setattr(bp._common, "compute_spectral_rolloff_hz", lambda *a, **k: 2000.0)
+
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    # render injected but it must NEVER be called -- no search, no refine
+    rc = bp.main(_main_args(base, tmp_path, **{"max-iters": 2}),
+                 render_fn=_render_must_not_be_called)
+    assert rc == 0
+    eq = bp.eq_block(bp.load_yaml(str(out_preset)))["params"]
+    assert all(eq[f"band{i}_gain"] == 0.0 for i in range(1, 9))   # FLAT -- never eq_matched
+    assert eq["output_db"] == 0.0
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert report["mode"] == "degraded-reference"
+    assert report["tunable"] is False
+    # the aggressive eq_match proximity-search / refine NEVER ran
+    assert "proximity_pct" not in report
+    assert "refine_history" not in report
+    # the researched gear is still pinned (it carries the tone)
+    assert report["amp"] == "nam_dumble_ods_john_mayer_a2"
+
+
+def test_main_degraded_low_rolloff_ships_flat_eq(tmp_path: Path, monkeypatch):
+    # top octave NOT dead, but rolloff < 800 Hz -> a low-mid fragment -> degraded
+    _noise = _noise_wav_factory(tmp_path)
+    _noise(tmp_path / "ref.wav")
+    _noise(tmp_path / "di.wav")
+    monkeypatch.setattr(bp._common, "fingerprint_match_target",
+                        lambda sig, sr: _clean_fp(top_octave_dead=False, self_floor_pct=91.0,
+                                                  reliable_range_hz=[80, 5120]))
+    monkeypatch.setattr(bp._common, "compute_spectral_rolloff_hz", lambda *a, **k: 517.0)
+
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    rc = bp.main(_main_args(base, tmp_path, **{"max-iters": 2}),
+                 render_fn=_render_must_not_be_called)
+    assert rc == 0
+    eq = bp.eq_block(bp.load_yaml(str(out_preset)))["params"]
+    assert all(eq[f"band{i}_gain"] == 0.0 for i in range(1, 9))
+    assert eq["output_db"] == 0.0
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert report["mode"] == "degraded-reference"
+    assert report["tunable"] is False
+
+
+def test_main_clean_ref_runs_full_refine_not_forced_flat(tmp_path: Path, monkeypatch):
+    # a CLEAN reference (top octave alive, rolloff >= 800) -> the existing full
+    # proximity search + eq_match refine path runs as before (NOT forced flat).
+    _noise = _noise_wav_factory(tmp_path)
+    _noise(tmp_path / "ref.wav")
+    _noise(tmp_path / "di.wav")
+    monkeypatch.setattr(bp._common, "fingerprint_match_target", lambda sig, sr: _clean_fp())
+    monkeypatch.setattr(bp._common, "compute_spectral_rolloff_hz", lambda *a, **k: 2500.0)
+
+    calls = {"n": 0}
+
+    def fake_render(_preset) -> str:
+        calls["n"] += 1
+        return _noise(tmp_path / f"r{calls['n']}.wav")
+
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    rc = bp.main(_main_args(base, tmp_path, **{"max-iters": 2}), render_fn=fake_render)
+    assert rc == 0
+    assert calls["n"] > 0                       # the full search + refine rendered
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert "mode" not in report                 # the full path is NOT a flat fallback
+    assert "proximity_pct" in report            # the proximity search ran
+    assert "refine_history" in report           # the eq_match refine ran
+
+
+def test_main_degraded_report_carries_evidence_and_note(tmp_path: Path, monkeypatch):
+    _noise = _noise_wav_factory(tmp_path)
+    _noise(tmp_path / "ref.wav")
+    _noise(tmp_path / "di.wav")
+    monkeypatch.setattr(bp._common, "fingerprint_match_target",
+                        lambda sig, sr: _clean_fp(top_octave_dead=True, self_floor_pct=88.0,
+                                                  reliable_range_hz=[80, 2560]))
+    monkeypatch.setattr(bp._common, "compute_spectral_rolloff_hz", lambda *a, **k: 517.0)
+
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    bp.main(_main_args(base, tmp_path, **{"max-iters": 2}),
+            render_fn=_render_must_not_be_called)
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    # the degradation evidence rides into the report
+    assert report["top_octave_dead"] is True
+    assert report["rolloff_hz"] == 517.0
+    assert report["self_floor_pct"] == 88.0
+    assert report["reliable_range_hz"] == [80, 2560]
+    # and a human-readable note explaining why the EQ was left flat
+    assert "note" in report and "degraded" in report["note"].lower()

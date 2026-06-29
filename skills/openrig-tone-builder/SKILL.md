@@ -102,8 +102,10 @@ carries the tone — and skip the proximity / refine / `within` steps.**
    - **Same PIN logic for a preamp or a cab** when the exact capture exists.
    **The engine preferring a different amp than the researched one is NOT permission
    to ship it.** When the exact capture exists it PINS; if the pinned chain cannot
-   reach the floor, that is a real signal (degraded reference, wrong drive/EQ, high
-   floor) you SURFACE to the user. You do NOT swap the artist's amp to chase 1–2% of
+   reach the floor, that is a real signal (wrong drive/EQ, or a genuinely high floor)
+   you SURFACE to the user — a **degraded** reference never reaches here, the engine
+   auto-detects it and ships flat as `mode: degraded-reference`. You do NOT swap the
+   artist's amp to chase 1–2% of
    a noisy number. **If `resolve_gear` can't back a name, it ABORTS as `unresolved`
    — you fix the RESEARCH name, never feed it an id.**
 4. **Rule B — every FX param is sourced, derivable, or `unverified`.** In the
@@ -169,6 +171,13 @@ the dev-tree binary — Step 0b). The proximity loop, the EQ refine, and the `wi
 **do not apply**: there is no number to optimise toward. That is NOT a licence to shape the
 tone by ear.
 
+> **A third entry is AUTOMATIC.** When a reference WAV *is* present and renderable but
+> `build_preset` detects it is **degraded** (top-dead / low-mid fragment), the engine
+> switches to this same flat-EQ, gear-driven treatment **itself** and reports
+> **`mode: degraded-reference`** (not `reference-less`). Everything below — flat EQ,
+> `output_db` 0, the ear-feedback procedure — applies identically. See "The
+> degraded-reference trap".
+
 > ⛔ **You have no ears. You NEVER author EQ band gains by ear, and you NEVER set
 > `output_db`.** Hand-dialling a "genre EQ" is the documented failure of this session — it
 > produced nasal, honky, unusable tones; the user confirmed that flattening the EQ to 0
@@ -224,31 +233,46 @@ about. Map the complaint to ONE bounded, researched move, then STOP:
 pre-emptively brighten/darken, do not "polish". One complaint → one bounded move → stop and
 let them judge again.
 
-## ⛔ The degraded-reference trap — when the number LIES
+## ⛔ The degraded-reference trap — `build_preset` auto-detects it; you NEVER hand-EQ
 
-A separated stem from a **mix where the instrument is buried** (e.g. the guitar in
-a piano-driven song) is not a guitar spectrum — it is a low-mid fragment with the
-top octave stripped by the separator. The engine already **protects you**: it caps
-the EQ trim at ±6 dB and **holds the dead-top / out-of-range bands at 0** (the
-`fingerprint_match_target` excludes those bands from `proximity_pct`). So the old
-"+10…+15 dB low-mid pile" can't happen through the engine. What CAN still mislead is
-**which gear scores best**. The reference is **degraded** when any holds:
+A separated stem from a **mix where the instrument is buried** (e.g. the guitar in a
+piano-driven song) is not a guitar spectrum — it is a **low-mid fragment with the top
+octave stripped** by the separator. Matching it with `eq_match` piles low-mid and cuts the
+top → a dark/boxy **"99 % but muffled"** tone. **`build_preset` now catches this for you —
+you do NOT run `eq_match` on a degraded stem and you do NOT hand-EQ it.**
 
-- **top octave** (~10 kHz) more than ~30 dB below the ~400 Hz body, AND/OR
-- **85 % of the energy rolled off below ~1 kHz**, AND/OR
-- a **low `self_floor_pct`** (< ~90 %).
+**The engine AUTO-DETECTS a degraded reference** — when the honest fingerprint shows
+**`top_octave_dead`** OR the **spectral rolloff is below ~800 Hz** (a separated low-mid
+fragment) — and **automatically falls back to the REFERENCE-LESS treatment**: it PINS the
+researched gear and ships a **FLAT** `eq_eight_band_parametric` (all band gains 0,
+`output_db` 0), with **NO `eq_match` search/refine and NO proximity loop**. The researched
+**amp + drive + cab carry the tone**; the EQ stays flat. The report is marked
+**`mode: degraded-reference`, `tunable: false`**, and carries the degradation evidence
+(e.g. top octave ~30 dB below the ~400 Hz body, ~85 % of energy below ~1 kHz, a low
+`self_floor_pct`) plus a note. It does **NOT** pile low-mid to chase the dead stem. (Same
+flat-EQ, gear-driven assembly as the **REFERENCE-LESS build** — the only difference is that
+the engine chose it because the reference is *unusable*, not *absent*.)
 
-Measured on the real Clocks guitar (Moisés stem: 10 k at −101 dB, 85 % of energy
-below 630 Hz): the darkening build measured **88 %** but its high end sat **−18 dB**
-below the body (boxy); the gear-driven bright build measured only **64 %** but had a
-flat, guitar-like tilt — the **lower** number was the **right** tone.
+**Measured proof:** the John Mayer "Gravity" rhythm stem is `top_octave_dead` with a
+spectral rolloff of **517 Hz**; left to run, `eq_match` wanted a **+6 dB low-mid pile** —
+exactly the darkening the flat fallback prevents.
 
-**Rule:** on a degraded reference, build the **researched gear** (the amp IS the
-timbre), let the engine tune within its ±6 cap, and hand it to the **user's ear** —
-this is the one case where the number is actively misleading and only the user
-playing can judge. Report it plainly ("the stem is a top-dead, low-mid fragment —
-matching it would darken the tone; I built the researched rig bright instead, your
-ear decides"). A cleaner stem (or the full-mix guitar) lets the number lead again.
+**Your job on a degraded reference — relay it plainly, then take ear feedback; NEVER
+hand-EQ:**
+1. **RELAY** the engine's verdict in the user's language, e.g.: *"the stem is a top-dead,
+   low-mid fragment; matching it would darken the tone, so the EQ was left flat and the
+   researched gear carries the tone — your ear decides. A cleaner isolated stem (or the
+   full-mix guitar) would let the EQ-match run."* *(render in the user's language at runtime)*
+2. **Take ear feedback** through the existing REFERENCE-LESS **"Taking EAR feedback"**
+   procedure (one bounded ≈ ±2–3 dB move on the user's explicit word). You do **NOT** decide
+   by ear yourself, do **NOT** hand-author a "bright EQ", and do **NOT** touch `output_db` —
+   the engine shipped it FLAT and the gear is the tone.
+
+**The number is NOT the validator here — the user's ear is.** A degraded reference means
+`proximity_pct` would chase the artifact, so the **`within` / proximity gate is skipped** on
+this path (the report reads `mode: degraded-reference`, not a shortfall). This is the one
+case where the number is actively misleading; only the user playing can judge. A cleaner
+stem (or the full-mix guitar) lets the number lead again.
 
 ## Chain vs preset vs slot — read this before anything else
 
@@ -575,19 +599,19 @@ override.)
 
 ### ⛔ Ref-sanity check — is the top end real, or a separation artifact?
 
-A source-separated stem often **loses its top octave**. The engine detects and excludes
-it: when the reference's top octave is dead, the `fingerprint_match_target` marks it
-(`top_octave_dead`), the proximity metric restricts to the trustworthy range, and the
-EQ trim **holds** the top bands (never cutting toward the dead ref). So `proximity_pct`
-already reflects only the trustworthy range; you still gate on `within`. When the top is
-dead:
+A source-separated stem often **loses its top octave**. The honest fingerprint marks this
+as **`top_octave_dead`** — and that is one of the two triggers (`top_octave_dead` OR a
+spectral rolloff < ~800 Hz) for the **degraded-reference path**: `build_preset` then PINS
+the researched gear, ships a **FLAT** EQ (`output_db` 0), runs **no `eq_match`** (so it
+never cuts toward the dead ref), and reports **`mode: degraded-reference`** (see "The
+degraded-reference trap — `build_preset` auto-detects it"). On this path:
 - **NEVER hand-cut the top or swap to a darker amp to "match" the dead ref** — that's
-  the "99% but sounds muffled" bug.
-- **Let the amp's natural voicing carry the presence.**
-- **Tell the user once**, e.g.: *"this stem is source-separated and lost its top octave,
-  so I'm matching the trustworthy range and letting the amp's natural brilho carry the
-  presence — I will NOT low-pass the tone. A cleaner stem would let me match the full
-  range."* *(render in the user's language at runtime)*
+  the "99% but sounds muffled" bug. The engine already prevents it (flat EQ, no `eq_match`).
+- **Let the amp's natural voicing carry the presence** — the flat EQ leaves it intact.
+- **Tell the user once**, e.g.: *"this stem is source-separated and lost its top octave, so
+  the EQ was left flat and the amp's natural brilho carries the presence — I will NOT
+  low-pass the tone. A cleaner stem would let the EQ-match run."* *(render in the user's
+  language at runtime)*
 
 ### ⛔ HARD RULE — no suppositions about what the reference contains
 
@@ -999,6 +1023,11 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
       by ear or invent a genre curve, and you told the user it's an un-tunable starting
       point refinable only by a reference WAV or directional ear feedback. (The `within` /
       render items above apply only when a reference exists and you can render.)
+- [ ] **Degraded reference (`mode: degraded-reference`):** when `build_preset` auto-detected
+      a top-dead / low-mid-fragment reference, you RELAYED that the EQ was left flat and the
+      gear carries the tone, did NOT hand-EQ or "build it bright", did NOT treat the skipped
+      `within` gate as a shortfall, and took only the user's directional ear feedback. The
+      proximity number is NOT the validator on this path — the user's ear is.
 - [ ] You did NOT set delay/reverb from `time_fx`, did NOT EQ-darken off a raw `centroid`,
       did NOT assert a sonic verdict of your own. The user's ear redirected the build ONLY
       when the user said it's bad.
@@ -1029,8 +1058,9 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   proximity ranked a generic `nam_fender_deluxe_reverb` (67.81%) above the artist's
   `nam_dumble_ods_john_mayer` (66.10%) — a 1.7% noise gap, nothing clearing the floor.
   When the EXACT capture exists, `resolve_gear` PINS it and the number only regulates its
-  gain-axis; it NEVER picks the amp. A below-floor pinned chain is a degraded-ref /
-  wrong-drive / high-floor signal you surface — not a license to ship the Fender. Cite the
+  gain-axis; it NEVER picks the amp. A below-floor pinned chain is a wrong-drive /
+  high-floor signal you surface (a degraded reference is auto-caught upstream and shipped
+  flat as `mode: degraded-reference`) — not a license to ship the Fender. Cite the
   artist + signature in the research so the catalog grep finds the signature capture.
 - **Leaving timbre blocks at default while only the EQ moves** — "todos os blocos têm
   regulagens" (every block has adjustments). Regulating is multi-block: the amp gain-axis
@@ -1058,8 +1088,9 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   the ref's `RMS` (performance + mastering → never matched). Delay/reverb from research;
   centroid as directional shape vs the spectrogram; level is the user's rig master
   (`output_db` stays 0).
-- **Hand-authoring EQ band gains by ear on a reference-less preset** (no WAV, or no
-  render). You have no ears — leave the EQ **FLAT** (all band gains 0, `output_db` 0); the
+- **Hand-authoring EQ band gains by ear on a reference-less preset** (no WAV, no render, or
+  a **degraded reference** the engine shipped flat as `mode: degraded-reference`). You have
+  no ears — leave the EQ **FLAT** (all band gains 0, `output_db` 0); the
   researched amp + drive + cab carry the tone. Refine ONLY on the user's directional ear
   feedback (one bounded ≈ ±2–3 dB move), never by inventing a genre EQ curve. Blind EQ
   produced nasal/honky tones — the documented failure.
@@ -1096,7 +1127,8 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | "I'll nudge `output_db` up so it's nice and loud" | `output_db` is ALWAYS 0 — a native dB control the user has no usable handle on, not a tone control. Level is the user's rig master. The EQ shapes tone only (band gains). |
 | "I can't render, but I'll EQ it by ear to get close" | You have no ears, and no render means no number to optimise toward. Run the REFERENCE-LESS build (flat EQ, the gear carries the tone) and say it's un-tunable until they give a WAV or directional ear feedback. Never blind-EQ to compensate for a missing render. |
 | "Proximity is stuck at 88%, close enough / best I can get" | The bar is the report's `within` (within ~3% of `self_floor_pct`), not 95. If 88% is below the floor, widen the research. If 88% IS within ~3% of the floor (the material's ceiling), you're DONE — stop chasing an impossible number. |
-| "The number ranked a Fender above the John-Mayer Dumble, so I'll ship the Fender" | The number is too weak to tell amps apart — 67.81% vs 66.10% is a 1.7% noise gap, nothing cleared the floor. When the exact capture exists `resolve_gear` PINS it and the number only regulates the gain-axis; it NEVER picks the amp. A below-floor pinned chain is a degraded-ref / wrong-drive / high-floor signal you surface. |
+| "The stem is a top-dead fragment, so I'll EQ it bright by hand to the right tone" | You author NO EQ. `build_preset` auto-detects the degraded reference (`top_octave_dead` OR rolloff < ~800 Hz) and ships the gear with a **FLAT** EQ (`mode: degraded-reference`); the gear carries the tone. You relay it; the proximity number is NOT the validator (it would chase the artifact) — the user's ear is. One bounded ear move only on their word. |
+| "The number ranked a Fender above the John-Mayer Dumble, so I'll ship the Fender" | The number is too weak to tell amps apart — 67.81% vs 66.10% is a 1.7% noise gap, nothing cleared the floor. When the exact capture exists `resolve_gear` PINS it and the number only regulates the gain-axis; it NEVER picks the amp. A below-floor pinned chain is a wrong-drive / high-floor signal you surface (a degraded reference is auto-caught upstream and shipped flat as `mode: degraded-reference`). |
 | "I'll just regulate the EQ, the other blocks are fine at default" | Regulating is multi-block: the amp gain-axis + the drive + the EQ trim all move, and every feel block carries researched params (Rule B), never the default. A run where only the EQ moved is wrong — "todos os blocos têm regulagens". |
 | "No reverb or delay in my JSON — the record was probably dry" | "Probably dry" is an assumption, not a source. Zero reverb AND zero delay is a red flag: re-research the ambience or cite a source. And a noisy high-gain capture needs an enabled gate. |
 | "I don't have the comp's exact knobs, I'll set values and move on" | Set the default, but tag `provenance: unverified` and surface it from the report's `unverified` list (Rule B). Never present a default as sourced; the number never sets feel params. |

@@ -215,6 +215,32 @@ What reference-less mode does:
 reference-less (report `"mode": "reference-less"`, `"reason": "no render binary"`)
 instead of crashing — you still get a usable pinned + flat-EQ preset.
 
+### Degraded-reference auto-detection: a degraded stem never drives the EQ-match
+
+A reference that is a **degraded stem** — a source-separated song stem that lost
+its top octave and is a low-mid fragment — is **not a guitar spectrum**, it is a
+boxy low-mid shape. Matching its LTAS with the aggressive `eq_match` piles
+low-mid and cuts the top: the **"99% number but sounds muffled / dark / boxy"**
+failure. So even with a `--ref` present **and** a runnable render binary,
+`build_preset` first measures the reference fingerprint and the **85% spectral
+rolloff** and treats the reference as **degraded** when either:
+
+- `top_octave_dead` is true (the ≥ 6.3 kHz region is below the audible floor — an
+  AI source-separation artifact), **or**
+- the spectral **rolloff < 800 Hz** (`DEGRADED_ROLLOFF_HZ` — 85% of the energy
+  sits below 800 Hz, i.e. a low-mid fragment, not a guitar spectrum).
+
+When the reference is degraded, `build_preset` does **NOT** run the LTAS
+`eq_match` (it would darken the tone). It falls back to the **same reference-less
+flat-EQ / gear-driven treatment** — pins the researched gear, leaves the EQ flat
+(`band{i}_gain = 0.0`, `output_db = 0.0`), renders nothing — and reports
+`"mode": "degraded-reference"`, `"tunable": false`, plus the degradation evidence
+(`top_octave_dead`, `rolloff_hz`, `self_floor_pct`, `reliable_range_hz`) and a
+`note`: the researched gear carries the tone — **validate by ear**; a cleaner
+isolated stem re-enables the full match. A **clean** reference (top octave alive,
+rolloff ≥ 800 Hz) runs the existing full proximity search + `eq_match` refine
+unchanged.
+
 ### Standalone `resolve_gear.py` CLI
 
 `resolve_gear.py` also runs on its own — research JSON in, base-chain YAML out —
