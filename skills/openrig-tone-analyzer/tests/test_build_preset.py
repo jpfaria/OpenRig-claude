@@ -1,21 +1,29 @@
 """Tests for the offline single-tone preset builder (scripts/build_preset.py).
 
 build_preset is the deterministic "FORM" of the openrig-tone-builder skill as
-ONE portable tool: measure the reference once, search amp x drive (+ cab IR
-when the amp capture is DIRECT) for the best spectral proximity, refine the
-8-band EQ with a CAPPED (+/-6 dB) trim that HOLDS the dead-top / out-of-range
+ONE portable tool: measure the reference once, search amp x drive (+ a cab ONLY
+when the chosen CORE is a `type: preamp`) for the best spectral proximity, refine
+the 8-band EQ with a CAPPED (+/-6 dB) trim that HOLDS the dead-top / out-of-range
 bands at 0, set the headroom, and write a flat preset whose chain ENDS AT THE
 EQ -- no limiter, no volume.
 
+The cab rule is a pure CATALOG-TYPE check: a `type: preamp` capture (preamp, no
+power amp/speaker) needs a cab; a `type: amp` capture is a FULL amp -- a combo
+(speaker baked in) OR a head+cab mic'd -- and is NEVER cabbed; a `type: body`
+(acoustic) and a `:full_rig` are never cabbed either. There is NO top-octave /
+"direct" heuristic and NO render-to-measure for the cab decision -- the type
+decides.
+
 The pure layer (chain assembly, EQ grid, +/-6 cap, hold-mask, headroom
-normalisation, YAML round-trip, direct-capture / cab detection) is tested
-directly. The gear search and the EQ-refine loop are tested with injected fake
+normalisation, YAML round-trip, type-driven cab decision) is tested directly.
+The gear search and the EQ-refine loop are tested with injected fake
 render/measurement callables that simulate gear ranking and convergence -- no
 Rust binary, no real WAVs.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -31,6 +39,12 @@ from scripts import build_preset as bp  # noqa: E402
 
 GRID = [80, 160, 320, 640, 1280, 2560, 5120, 10240]
 FINE = list(_common.THIRD_OCTAVE_CENTERS_HZ)
+
+# Hand-written catalog fixtures (the SAME ones the catalog/validate/lint tests
+# use): nam_dumble_ods_john_mayer_a2 (amp, gain axis [2,5,8,10]), nam_dumble_a2,
+# ir_marshall_4x12_v30 (cab), nam_ibanez_ts808_a2 (gain). The native list the
+# gate resolves relative to build_preset.py ships eq_eight_band_parametric, etc.
+FIXTURES_CATALOG = _HERE / "fixtures" / "catalog"
 
 
 # --- block builders & chain assembly ---------------------------------------
@@ -219,49 +233,51 @@ def test_yaml_round_trip(tmp_path: Path):
     assert back == p
 
 
-# --- direct-capture detection + hold mask ----------------------------------
+# --- type-driven cab decision + hold mask ----------------------------------
 
 def _fine_ltas(top_below_body_db: float) -> np.ndarray:
     """Synthetic fine LTAS: flat body, top octave sitting `top_below_body_db`
-    below the body."""
+    below the body. (Used as a synthetic reference spectrum across the search
+    tests -- the cab decision no longer reads the spectrum at all.)"""
     centers = np.asarray(FINE)
     v = np.full(len(centers), -10.0)
     v[centers >= 6300] = -10.0 - top_below_body_db
     return v
 
 
-def test_is_direct_capture_true_when_top_near_body():
-    # top only 5 dB below body -> a head with no cab (fizzy/direct)
-    assert bp.is_direct_capture(_fine_ltas(5.0)) is True
+# The cab decision is a PURE catalog-type check (no render, no measure):
+#   cab auto-inserts  iff  core is `type: preamp`  AND  --cab-model given  AND
+#   no researched cab already present.
+# A `type: amp` capture is a FULL amp (combo or head+cab) -> NEVER cabbed; a
+# `type: body` (acoustic) and a `type: full_rig` are never cabbed either.
+
+def test_decide_cab_preamp_gets_the_cab():
+    # a type: preamp (preamp only, no power amp/speaker) needs a cab
+    assert bp.decide_cab("preamp", "ir_marshall_4x12_v30", False) == "ir_marshall_4x12_v30"
 
 
-def test_is_direct_capture_false_when_top_rolled_off():
-    # top 30 dB below body -> a cabbed/full-rig roll-off, NOT direct
-    assert bp.is_direct_capture(_fine_ltas(30.0)) is False
+def test_decide_cab_amp_never_gets_cab():
+    # a type: amp is a FULL amp (combo OR head+cab mic'd) -> NEVER cabbed
+    assert bp.decide_cab("amp", "ir_marshall_4x12_v30", False) is None
 
 
 def test_decide_cab_full_rig_never_gets_cab():
-    # measure_fn must never be consulted for a full_rig amp
-    def boom(_blocks):
-        raise AssertionError("full_rig must not be measured for cab need")
-
-    direct, cab = bp.decide_cab("nam_rig_a1", "full_rig", "ir_marshall_4x12_v30", boom)
-    assert direct is False
-    assert cab is None
+    assert bp.decide_cab("full_rig", "ir_marshall_4x12_v30", False) is None
 
 
-def test_decide_cab_direct_amp_gets_the_cab():
-    direct, cab = bp.decide_cab("nam_amp_a1", "amp", "ir_marshall_4x12_v30",
-                                lambda _b: _fine_ltas(4.0))
-    assert direct is True
-    assert cab == "ir_marshall_4x12_v30"
+def test_decide_cab_body_never_gets_cab():
+    # an acoustic body core is never given a guitar cab
+    assert bp.decide_cab("body", "ir_marshall_4x12_v30", False) is None
 
 
-def test_decide_cab_cabbed_amp_gets_no_cab():
-    direct, cab = bp.decide_cab("nam_amp_a1", "amp", "ir_marshall_4x12_v30",
-                                lambda _b: _fine_ltas(35.0))
-    assert direct is False
-    assert cab is None
+def test_decide_cab_preamp_with_researched_cab_gets_none():
+    # a researched cab is already in the chain -> never double the cabinet
+    assert bp.decide_cab("preamp", "ir_marshall_4x12_v30", True) is None
+
+
+def test_decide_cab_preamp_without_cab_model_gets_none():
+    # no --cab-model given -> nothing to auto-insert
+    assert bp.decide_cab("preamp", None, False) is None
 
 
 def test_coarse_hold_mask_excludes_dead_top_and_out_of_range():
@@ -459,24 +475,18 @@ def test_search_chain_full_rig_amp_gets_no_cab():
     assert any(b["type"] == "full_rig" and b["model"] == "rig_amp" for b in res["blocks"])
 
 
-def test_search_chain_direct_amp_inserts_cab_plugin_right_after_amp():
+def test_search_chain_preamp_inserts_cab_plugin_right_after_preamp():
+    # a `type: preamp` core (preamp only) needs a cab -> the --cab-model cab is
+    # auto-inserted right after the preamp, as a `type: cab` PLUGIN block.
     ref = _fine_ltas(20.0)
 
-    def measure_fn(blocks):
-        models = [b.get("model") for b in blocks]
-        types = [b["type"] for b in blocks]
-        # the amp-only probe (no cab, no drive) reads as a direct head
-        if "head_amp" in models and "cab" not in types and "gain" not in types:
-            return _fine_ltas(4.0)
-        return ref
-
     blocks = [
-        {"type": "amp", "candidates": ["head_amp"]},
+        {"type": "preamp", "candidates": ["nam_marshall_jcm_800_2203_a2"]},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
-    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn,
+    res = bp.search_chain(bp.classify_chain(blocks), ref, lambda b: ref,
                           cab_model="ir_mesa_os_4x12_v30")
-    assert res["direct"] is True
+    assert res["cab_reason"] == "preamp"
     assert res["cab_model"] == "ir_mesa_os_4x12_v30"
     # the chosen cab model id is recorded in the gear history too
     assert res["history"][0]["cab_model"] == "ir_mesa_os_4x12_v30"
@@ -488,19 +498,56 @@ def test_search_chain_direct_amp_inserts_cab_plugin_right_after_amp():
     assert not any(b.get("model") == "generic_ir" for b in out)
     cab = [b for b in out if b["type"] == "cab"][0]
     assert cab["model"] == "ir_mesa_os_4x12_v30"
-    assert types.index("cab") == types.index("amp") + 1   # cab right after the amp
+    assert types.index("cab") == types.index("preamp") + 1   # cab right after preamp
 
 
-def test_search_chain_researched_ir_cab_blocks_auto_insert():
+def test_search_chain_amp_core_never_cabbed_even_with_cab_model():
+    # a `type: amp` capture is a FULL amp (combo OR head+cab mic'd) -> it is NEVER
+    # auto-cabbed, even when --cab-model is given (no double-cab onto a combo).
+    ref = _fine_ltas(20.0)
+
+    blocks = [
+        {"type": "amp", "candidates": ["nam_fender_deluxe_reverb_a2"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, lambda b: ref,
+                          cab_model="ir_x")
+    assert res["cab_model"] is None
+    assert res["cab_reason"] is None
+    assert not any(b["type"] == "cab" for b in res["blocks"])
+    assert not any(b["type"] == "ir" for b in res["blocks"])
+
+
+def test_search_chain_preamp_cab_decision_makes_no_extra_probe_render():
+    # the cab decision is a pure catalog-TYPE check -> NO amp-only probe render.
+    # A single preamp combo must trigger exactly ONE render (the full chain), not
+    # two (the old direct-detection added an extra amp-only probe render).
+    ref = _fine_ltas(20.0)
+    calls = {"n": 0}
+
+    def measure_fn(blocks):
+        calls["n"] += 1
+        return ref
+
+    blocks = [
+        {"type": "preamp", "candidates": ["preamp_a"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn, cab_model="ir_x")
+    assert res["cab_reason"] == "preamp"
+    assert calls["n"] == 1     # only the full-chain render; no amp-only probe
+
+
+def test_search_chain_preamp_with_researched_ir_cab_blocks_auto_insert():
     ref = _fine_ltas(20.0)
 
     # an off-catalog researched cab (type ir, generic_ir) already in the chain:
-    # even a direct amp must not get a second auto-inserted cab.
+    # even a preamp core must not get a second auto-inserted cab.
     def measure_fn(blocks):
         return ref
 
     blocks = [
-        {"type": "amp", "candidates": ["head_amp"]},
+        {"type": "preamp", "candidates": ["preamp_a"]},
         {"type": "ir", "model": "generic_ir", "params": {"file": "/abs/researched.wav"}},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
@@ -511,15 +558,16 @@ def test_search_chain_researched_ir_cab_blocks_auto_insert():
     # no auto cab plugin added either
     assert not any(b["type"] == "cab" for b in res["blocks"])
     assert res["cab_model"] is None
+    assert res["cab_reason"] is None
 
 
-def test_search_chain_researched_cab_plugin_blocks_auto_insert():
+def test_search_chain_preamp_with_researched_cab_plugin_blocks_auto_insert():
     ref = _fine_ltas(20.0)
 
-    # a researched `type: cab` plugin already FIXED in the chain: a direct amp
+    # a researched `type: cab` plugin already FIXED in the chain: a preamp core
     # must not get a second auto-inserted cab.
     blocks = [
-        {"type": "amp", "candidates": ["head_amp"]},
+        {"type": "preamp", "candidates": ["preamp_a"]},
         {"type": "cab", "model": "ir_marshall_1960av_4x12", "params": {}},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
@@ -529,6 +577,7 @@ def test_search_chain_researched_cab_plugin_blocks_auto_insert():
     assert len(cabs) == 1
     assert cabs[0]["model"] == "ir_marshall_1960av_4x12"
     assert res["cab_model"] is None
+    assert res["cab_reason"] is None
 
 
 def test_search_chain_cab_search_slot_searches_cab_plugins():
@@ -744,39 +793,51 @@ def test_classify_chain_pinned_preamp_and_body_are_core_not_fixed():
     assert [s.role for s in bp.classify_chain(blocks)] == ["search", "search", "tune"]
 
 
-def test_search_chain_pinned_amp_is_core_with_direct_cab_and_recorded():
-    # the John Mayer "Gravity" case: the artist's actual amp is PINNED as a
-    # single fixed model. It must be the CORE -> direct-detection runs, the
-    # --cab-model cab auto-inserts when direct, the emitted amp is exactly that
-    # model, the report records it as the chosen amp, and it is not dropped.
+def test_search_chain_pinned_amp_combo_is_core_and_never_cabbed():
+    # the Fender Deluxe Reverb case: a PINNED `type: amp` is a FULL combo amp
+    # (speaker baked in). It must be the recorded CORE, used verbatim, but it
+    # NEVER takes a cab -- even with --cab-model given (the old direct-detection
+    # was double-cabbing a combo).
     ref = _fine_ltas(20.0)
 
-    def measure_fn(blocks):
-        models = [b.get("model") for b in blocks]
-        types = [b["type"] for b in blocks]
-        # the amp-only probe (no cab, no drive) reads as a direct head
-        if ("nam_dumble_ods_john_mayer_a2" in models
-                and "cab" not in types and "gain" not in types):
-            return _fine_ltas(4.0)
-        return ref
-
     blocks = [
-        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "amp", "model": "nam_fender_deluxe_reverb_a2"},
         {"type": "filter", "model": bp.EQ_MODEL},
     ]
-    res = bp.search_chain(bp.classify_chain(blocks), ref, measure_fn,
+    res = bp.search_chain(bp.classify_chain(blocks), ref, lambda b: ref,
                           cab_model="ir_mesa_os_4x12_v30")
-    assert res["amp"] == "nam_dumble_ods_john_mayer_a2"
+    assert res["amp"] == "nam_fender_deluxe_reverb_a2"
     assert res["amp_type"] == "amp"
-    assert res["direct"] is True
-    assert res["cab_model"] == "ir_mesa_os_4x12_v30"
+    assert res["cab_model"] is None
+    assert res["cab_reason"] is None
     # a single pinned variant -> exactly one combo searched, never swapped
     assert len(res["history"]) == 1
     out = res["blocks"]
+    assert not any(b["type"] == "cab" for b in out)
     amps = [b for b in out if b["type"] == "amp"]
-    assert len(amps) == 1 and amps[0]["model"] == "nam_dumble_ods_john_mayer_a2"
+    assert len(amps) == 1 and amps[0]["model"] == "nam_fender_deluxe_reverb_a2"
+
+
+def test_search_chain_pinned_preamp_is_core_and_gets_cab():
+    # a PINNED `type: preamp` (e.g. nam_marshall_jcm_800_2203_a2 -- preamp, no
+    # power amp/speaker) is the recorded CORE and DOES take the --cab-model cab,
+    # inserted right after the preamp.
+    ref = _fine_ltas(20.0)
+
+    blocks = [
+        {"type": "preamp", "model": "nam_marshall_jcm_800_2203_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    res = bp.search_chain(bp.classify_chain(blocks), ref, lambda b: ref,
+                          cab_model="ir_mesa_os_4x12_v30")
+    assert res["amp"] == "nam_marshall_jcm_800_2203_a2"
+    assert res["amp_type"] == "preamp"
+    assert res["cab_reason"] == "preamp"
+    assert res["cab_model"] == "ir_mesa_os_4x12_v30"
+    assert len(res["history"]) == 1
+    out = res["blocks"]
     types = [b["type"] for b in out]
-    assert types.index("cab") == types.index("amp") + 1   # cab right after amp
+    assert types.index("cab") == types.index("preamp") + 1   # cab right after preamp
 
 
 def test_search_chain_pinned_amp_with_params_lands_on_block_and_report():
@@ -1015,3 +1076,195 @@ def test_headroom_pass_lands_peak_in_window():
 
     peak = bp.headroom_pass(p, render_peak_fn, max_iters=8)
     assert bp.PEAK_LO_DB <= peak <= bp.PEAK_HI_DB
+
+
+# --- VOLUME FIX: "max without clipping" level target -------------------------
+# The chain has NO limiter anymore, so the headroom pass pushes the DI peak as
+# hot as possible WITHOUT clipping: target ~ -1 dBFS, window [-1.5, -0.5], never
+# reaching 0 dBFS. OUTPUT_MAX is raised so a deep cab attenuation can be lifted.
+
+def test_level_constants_are_max_without_clipping():
+    # the new "max without clipping" law (no limiter -> no -7 dBFS headroom)
+    assert bp.PEAK_TARGET_DB == -1.0
+    assert (bp.PEAK_LO_DB, bp.PEAK_HI_DB) == (-1.5, -0.5)
+    # the window never touches 0 dBFS (no sample clipping)
+    assert bp.PEAK_HI_DB < 0.0
+    # OUTPUT_MAX raised so a ~-18..-24 dB cab can be compensated to the target
+    assert bp.OUTPUT_MIN == -24.0
+    assert bp.OUTPUT_MAX == 30.0
+
+
+def test_headroom_pass_compensates_deep_cab_above_old_cap():
+    # a cab plugin's manifest output_gain_db (~ -18 dB) drops the chain: at
+    # output_db=0 the peak sits ~ -19 dBFS. To reach the target the pass must
+    # drive output_db ABOVE the OLD +12 cap -> proves the cab is compensated.
+    p = _winning_preset()
+
+    def render_peak_fn(preset):
+        out = bp.eq_block(preset)["params"]["output_db"]
+        return -19.0 + out          # deep-cab attenuation, linear in output_db
+
+    peak = bp.headroom_pass(p, render_peak_fn, max_iters=8)
+    out_db = bp.eq_block(p)["params"]["output_db"]
+    assert out_db > 12.0                         # above the old OUTPUT_MAX cap
+    assert bp.PEAK_LO_DB <= peak <= bp.PEAK_HI_DB
+    assert peak < 0.0                            # never clips
+
+
+def test_headroom_pass_backs_off_and_never_clips():
+    # a chain hot enough to clip at high output_db: the ideal peak would land
+    # >= 0 dBFS (modelled as a hard clip at 0). The pass must back output_db DOWN
+    # so the FINAL peak is strictly below 0 (we never ship a clipping preset).
+    p = _winning_preset()
+
+    def render_peak_fn(preset):
+        out = bp.eq_block(preset)["params"]["output_db"]
+        ideal = out + 1.0           # at output_db=0 the ideal peak is +1 (clips)
+        return min(ideal, 0.0)      # digital full-scale clip at 0 dBFS
+
+    peak = bp.headroom_pass(p, render_peak_fn, max_iters=8)
+    assert peak < 0.0                            # backed off below clipping
+    assert bp.PEAK_LO_DB <= peak <= bp.PEAK_HI_DB
+
+
+# --- Part A: pre-render validate + lint gate --------------------------------
+
+def test_gate_chain_clean_returns_warn_keys():
+    raw = [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    out = bp.gate_chain(raw, str(FIXTURES_CATALOG))
+    assert "lint" in out and "validation_warnings" in out
+    assert isinstance(out["lint"], list)
+    assert isinstance(out["validation_warnings"], list)
+
+
+def test_gate_chain_aborts_on_unknown_model():
+    raw = [
+        {"type": "amp", "model": "made_up_amp_x"},   # invented -> unknown id
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    with pytest.raises(SystemExit):
+        bp.gate_chain(raw, str(FIXTURES_CATALOG))
+
+
+def test_gate_chain_aborts_on_forbidden_lint_block():
+    raw = [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "limiter", "model": "limiter_brickwall"},   # block-level lint
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    with pytest.raises(SystemExit):
+        bp.gate_chain(raw, str(FIXTURES_CATALOG))
+
+
+def test_gate_chain_validates_candidate_model_ids():
+    # candidates are expanded and validated -> an invented candidate id aborts
+    raw = [
+        {"type": "amp", "candidates": ["nam_dumble_ods_john_mayer_a2", "made_up_cand"]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    with pytest.raises(SystemExit):
+        bp.gate_chain(raw, str(FIXTURES_CATALOG))
+
+
+def test_gate_chain_validates_plugin_param_axis():
+    # an off-axis plugin param value on a candidate aborts (the gain=26 bug)
+    raw = [
+        {"type": "amp", "candidates": [
+            {"model": "nam_dumble_ods_john_mayer_a2", "params": {"gain": 26}},
+        ]},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    with pytest.raises(SystemExit):
+        bp.gate_chain(raw, str(FIXTURES_CATALOG))
+
+
+def test_gate_chain_no_plugins_root_skips_gate():
+    # older invocation with no --plugins-root: skip the gate (don't crash)
+    raw = [
+        {"type": "amp", "model": "whatever_unknown"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ]
+    out = bp.gate_chain(raw, "")
+    assert out == {"lint": [], "validation_warnings": []}
+
+
+# --- Part A: gate wired into main() (aborts BEFORE any render) ---------------
+
+def _write_base(tmp_path: Path, blocks: list[dict], pid: str = "x", name: str = "X") -> Path:
+    path = tmp_path / "base.yaml"
+    bp.dump_yaml({"id": pid, "name": name, "blocks": blocks}, str(path))
+    return path
+
+
+def _main_args(base: Path, tmp_path: Path, **extra) -> list[str]:
+    args = [
+        "--base-chain", str(base),
+        "--ref", str(tmp_path / "ref.wav"),
+        "--render-bin", "render-bin",
+        "--di", str(tmp_path / "di.wav"),
+        "--plugins-root", str(FIXTURES_CATALOG),
+        "--out-preset", str(tmp_path / "out.yaml"),
+    ]
+    for k, v in extra.items():
+        args += [f"--{k}", str(v)]
+    return args
+
+
+def test_main_aborts_before_render_on_unknown_model(tmp_path: Path):
+    calls: list = []
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "made_up_amp_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    with pytest.raises(SystemExit):
+        bp.main(_main_args(base, tmp_path),
+                render_fn=lambda _p: (calls.append(1), "x.wav")[1])
+    assert calls == []          # the gate aborted before any render
+
+
+def test_main_aborts_before_render_on_block_lint_finding(tmp_path: Path):
+    calls: list = []
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "limiter", "model": "limiter_brickwall"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    with pytest.raises(SystemExit):
+        bp.main(_main_args(base, tmp_path),
+                render_fn=lambda _p: (calls.append(1), "x.wav")[1])
+    assert calls == []
+
+
+def test_main_clean_chain_renders_and_report_has_gate_keys(tmp_path: Path):
+    import soundfile as sf
+
+    rng = np.random.default_rng(0)
+
+    def _noise_wav(path: Path) -> str:
+        sf.write(str(path), (rng.standard_normal(48000) * 0.05).astype("float32"), 48000)
+        return str(path)
+
+    _noise_wav(tmp_path / "ref.wav")
+    _noise_wav(tmp_path / "di.wav")
+
+    state = {"n": 0}
+
+    def fake_render(_preset) -> str:
+        state["n"] += 1
+        return _noise_wav(tmp_path / f"r{state['n']}.wav")
+
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    rc = bp.main(_main_args(base, tmp_path, **{"max-iters": 2}), render_fn=fake_render)
+
+    assert rc == 0
+    assert state["n"] > 0                       # the clean chain rendered
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert "lint" in report
+    assert "validation_warnings" in report

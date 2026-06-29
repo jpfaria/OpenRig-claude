@@ -1,0 +1,8 @@
+# Fixture native-model list (hand-written, mirrors the real native_models.yaml shape).
+# Used only by test_catalog.py; not the shipped list.
+- id: eq_eight_band_parametric
+  type: eq
+- id: brit_4x12
+  type: cab
+- id: compressor_studio_clean
+  type: dynamics

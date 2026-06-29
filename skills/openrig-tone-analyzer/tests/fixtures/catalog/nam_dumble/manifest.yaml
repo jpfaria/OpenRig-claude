@@ -1,0 +1,26 @@
+manifest_version: 1
+id: nam_dumble_a2
+display_name: Dumble ODS
+brand: dumble
+type: amp
+backend: nam
+architecture: A2
+sources:
+- https://www.tone3000.com/tones/00002
+parameters:
+- name: gain
+  display_name: Gain
+  values:
+  - 3
+  - 6
+  - 9
+captures:
+- values:
+    gain: 3
+  file: captures/dumble_gain3_a2.nam
+- values:
+    gain: 6
+  file: captures/dumble_gain6_a2.nam
+- values:
+    gain: 9
+  file: captures/dumble_gain9_a2.nam

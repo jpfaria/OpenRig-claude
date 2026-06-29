@@ -23,15 +23,27 @@ timbre-determining slots:
      and score `weighted_spectral_proximity_pct` over the reliable range. Pick
      the best combo. `--cab-model` auto-inserts a `type: cab` PLUGIN block
      (catalog model id, whose manifest `output_gain_db` makes the level right)
-     right after the amp ONLY when the amp renders DIRECT, there is no researched
-     cab already, and the amp is not `:full_rig`. (A raw off-catalog IR is the
-     separate `generic_ir` escape, authored directly in the base chain.)
+     right after the CORE ONLY when the chosen core is a `type: preamp` (a
+     preamp has no power amp/speaker, so it needs a cab), there is no researched
+     cab already, and a `--cab-model` was given. A `type: amp` capture is a FULL
+     amp -- a combo (speaker baked in) OR a head+cab mic'd -- and is NEVER
+     cabbed; a `type: body` (acoustic) and a `:full_rig` are never cabbed
+     either. The cab decision is a PURE catalog-type check -- no render-to-measure,
+     no top-octave "direct" heuristic; the catalog `type` is authoritative. (A
+     raw off-catalog IR is the separate `generic_ir` escape, authored directly
+     in the base chain.)
   4. EQ refine on the winner: iterate render -> `next_band_gains` (CAPPED at
      +/-6 dB, dead-top / out-of-range bands HELD at 0) -> apply, until
      within-floor / plateau / iteration cap.
-  5. Headroom: set the EQ `output_db` so the DI peak lands ~ -7 dBFS. The chain
-     ENDS AT THE EQ -- no limiter, no volume block is ever added (any
-     `limiter_brickwall` / `volume` in the base chain is STRIPPED).
+  5. Headroom: set the EQ `output_db` so the DI peak lands as HOT as possible
+     WITHOUT clipping (~ -1 dBFS, "max without clipping" -- the chain has no
+     limiter, so the old -7 dBFS headroom no longer applies; the peak never
+     reaches 0 dBFS). The chain ENDS AT THE EQ -- no limiter, no volume block is
+     ever added (any `limiter_brickwall` / `volume` in the base chain is STRIPPED).
+  Before any of this, a pre-render GATE validates every model id + plugin param
+  against the offline catalog and lints the chain against the tone POLICY: an
+  unknown id / off-axis plugin param or a block-level lint finding ABORTS the
+  build (no render), so a hallucinated id can never reach the renderer.
   6. Write the preset YAML (`openrig-render --chain` shape) and a report JSON
      (chosen amp/drive(s)/cab, proximity, self-floor, within, peak, the FIXED
      FX preserved, history).
@@ -81,6 +93,8 @@ sys.path.insert(0, str(_HERE.parent))
 import numpy as np  # noqa: E402
 
 from scripts import _common  # noqa: E402
+from scripts import lint_chain, validate_chain  # noqa: E402
+from scripts.catalog import load_catalog  # noqa: E402
 from scripts.eq_match import next_band_gains, next_highpass_hz  # noqa: E402
 
 # numpy scalars (from soundfile/numpy peak math) must serialise cleanly to YAML.
@@ -115,9 +129,10 @@ TYPE_FULL_RIG = "full_rig"
 TYPE_IR = "ir"
 TYPE_FILTER = "filter"
 
-# Core, head-style timbre slots that the `--cab-model` direct-capture rule may
-# sit a cab after. An acoustic `body` core is searched like an amp but is NEVER
-# given a guitar cab.
+# Core timbre slots recorded as the chosen "amp" in the report (`type: amp` or
+# `type: preamp`). NOTE: being an anchor does NOT imply a cab -- the cab rule is
+# a pure type check (see decide_cab): only a `type: preamp` core is cabbed; a
+# `type: amp` is a FULL amp (combo or head+cab) and is never cabbed.
 CAB_ANCHOR_TYPES = {TYPE_AMP, TYPE_PREAMP}
 # The timbre-determining CORE is identified by TYPE, never by the presence of a
 # `candidates:` list. A `type: amp/preamp/body` block is the core whether it is
@@ -170,18 +185,17 @@ GRID_HZ: list[int] = list(_common.BANDS_HZ)  # [80,160,320,640,1280,2560,5120,10
 # The EQ trim is a GENTLE shape, not a sledgehammer: cap at +/-6 dB (the old
 # rebuild_preset used +/-24, which piled low-mid and gutted presence).
 EQ_GAIN_MIN, EQ_GAIN_MAX = -6.0, 6.0
-OUTPUT_MIN, OUTPUT_MAX = -24.0, 12.0
-PEAK_TARGET_DB = -7.0
-PEAK_LO_DB, PEAK_HI_DB = -8.0, -6.0
-
-# A head-only (direct) capture leaves the top octave within this many dB of the
-# body -- nearly flat to 10 kHz = fizz = "toy sound" -> it needs a cab. A
-# real cab/full-rig rolls the top off well below this. NAMED per the FORM.
-DIRECT_TOP_EXCESS_DB = 15.0
-# Body region (low/mid) and top-octave region (the brilho a cab rolls off), on
-# the fine 1/3-octave grid, for the direct-capture decision.
-BODY_TOP_HZ = 2500.0
-TOP_OCTAVE_LOW_HZ = 6300.0
+# Level law: "max without clipping". The chain has NO limiter anymore (the old
+# -7 dBFS was limiter headroom that no longer applies), so the headroom pass
+# pushes the DI peak as HOT as possible WITHOUT clipping -- target ~ -1 dBFS,
+# accept window [-1.5, -0.5], and the peak must NEVER reach 0 dBFS (no sample
+# clipping). OUTPUT_MAX is raised to +30 so the pass can compensate a deep cab
+# attenuation: a `type: cab` plugin applies its manifest output_gain_db (~ -18 dB
+# for a 4x12 V30), so with a cab the chain drops ~18 dB -- the old +12 cap could
+# not lift it to the target and the preset shipped ~6-11 dB too quiet.
+OUTPUT_MIN, OUTPUT_MAX = -24.0, 30.0
+PEAK_TARGET_DB = -1.0
+PEAK_LO_DB, PEAK_HI_DB = -1.5, -0.5
 
 # The gate is "within this many % of the reference's own self-floor".
 SELF_FLOOR_MARGIN_PCT = 3.0
@@ -458,6 +472,83 @@ def assert_no_dropped_blocks(render_output: str) -> None:
             )
 
 
+# --- pre-render validate + lint gate ---------------------------------------
+
+def _validation_blocks(raw_blocks: list[dict]) -> list[dict]:
+    """Expand a base chain into the concrete (model, params) blocks the build
+    could emit, so `validate` can check every candidate model id + plugin param
+    OFFLINE before any render.
+
+    Each SEARCH slot's `candidates:` become one validation block per candidate
+    (the `none` token is dropped; the `:full_rig` suffix is stripped to the
+    registered model id; per-candidate params are merged over the block params).
+    FIXED / PINNED / TUNE blocks pass through with their `model:` verbatim. The
+    build-time helper keys are dropped (they are never real OpenRig params)."""
+    out: list[dict] = []
+    for b in raw_blocks:
+        if not isinstance(b, dict):
+            continue
+        base = {k: v for k, v in b.items() if k not in HELPER_KEYS}
+        cands = b.get("candidates")
+        if cands:
+            for cand in cands:
+                model, _full_rig, params = parse_candidate(cand)
+                if model == "none":
+                    continue
+                vb = dict(base)
+                vb["model"] = model
+                merged = dict(b.get("params") or {})
+                merged.update(params)
+                vb["params"] = merged
+                out.append(vb)
+        else:
+            out.append(base)
+    return out
+
+
+def gate_chain(raw_blocks, plugins_root, native_models_path=None) -> dict:
+    """Pre-render anti-hallucination GATE over the authored base chain.
+
+    Best-effort on the plugins-root presence: with no `plugins_root` (an older
+    invocation) the gate is SKIPPED (the render-time `assert_no_dropped_blocks`
+    remains the backstop). With a plugins-root it builds the offline catalog
+    (`native_models.yaml` resolved next to this file unless overridden) and:
+
+      * LINTS the chain against the tone policy -- any `level == "block"` finding
+        ABORTS (raises SystemExit, no render);
+      * VALIDATES every concrete model id + plugin param the build could emit
+        (candidates expanded) -- any catalog error (unknown id, off-axis plugin
+        param, forbidden block) ABORTS.
+
+    Returns `{"lint": [<warn findings>], "validation_warnings": [<str>]}` for the
+    report; raises SystemExit on any blocking finding or validation error."""
+    if not plugins_root:
+        return {"lint": [], "validation_warnings": []}
+    native = str(native_models_path) if native_models_path else str(_HERE / "native_models.yaml")
+    catalog = load_catalog(plugins_root, native)
+
+    findings = lint_chain.lint({"blocks": list(raw_blocks)}, catalog)
+    blocking = [f for f in findings if f.get("level") == "block"]
+    if blocking:
+        msgs = "\n  - ".join(f"{f.get('code')}: {f.get('message')}" for f in blocking)
+        raise SystemExit(
+            "lint gate blocked the base chain (fix it before rendering):\n  - " + msgs
+        )
+
+    result = validate_chain.validate({"blocks": _validation_blocks(raw_blocks)}, catalog)
+    if not result["ok"]:
+        msgs = "\n  - ".join(result["errors"])
+        raise SystemExit(
+            "validate gate refused the base chain -- unknown/invalid model id or "
+            "plugin param (no render):\n  - " + msgs
+        )
+
+    return {
+        "lint": [f for f in findings if f.get("level") == "warn"],
+        "validation_warnings": list(result["warnings"]),
+    }
+
+
 # --- pure EQ helpers -------------------------------------------------------
 
 def eq_block(preset: dict) -> dict:
@@ -507,27 +598,7 @@ def normalize_for_headroom(preset: dict) -> float:
     return offset
 
 
-# --- direct-capture detection + hold mask ----------------------------------
-
-def is_direct_capture(
-    fine_ltas,
-    centers: list[int] | None = None,
-    excess_db: float = DIRECT_TOP_EXCESS_DB,
-) -> bool:
-    """True when an amp-only capture is DIRECT (head-only, no cab): the top
-    octave sits within `excess_db` of the low/mid body, i.e. nearly flat to
-    10 kHz = fizz. A cab/full-rig rolls the top well below the body -> False."""
-    centers = list(_common.THIRD_OCTAVE_CENTERS_HZ) if centers is None else centers
-    c = np.asarray(centers, dtype=float)
-    v = np.asarray(fine_ltas, dtype=float)
-    body_mask = c <= BODY_TOP_HZ
-    top_mask = c >= TOP_OCTAVE_LOW_HZ
-    if not body_mask.any() or not top_mask.any():
-        return False
-    body = float(v[body_mask].max())
-    top = float(v[top_mask].max())
-    return (body - top) <= excess_db
-
+# --- hold mask -------------------------------------------------------------
 
 def coarse_hold_mask(ref_8band_ltas, reliable_range_hz) -> np.ndarray:
     """Boolean 8-band mask of the bands the EQ trim may move. HOLDS (False) the
@@ -541,19 +612,26 @@ def coarse_hold_mask(ref_8band_ltas, reliable_range_hz) -> np.ndarray:
 
 # --- gear search (render/measure injected) ---------------------------------
 
-def decide_cab(amp_model, amp_type, cab_model, measure_fn):
-    """Decide whether an amp needs a cab. A full_rig capture NEVER does (and is
-    never measured). Otherwise render the amp alone (flat EQ, no drive, no cab)
-    and check the top-octave excess.
+def decide_cab(core_type, cab_model, has_researched_cab):
+    """Decide whether the chosen CORE needs an auto-inserted cab, by CATALOG TYPE
+    alone -- no render, no measurement, no top-octave "direct" heuristic.
 
-    `measure_fn(blocks) -> fine_ltas` renders the blocks through the DI and
-    returns the wet 1/3-octave LTAS. Returns (direct: bool, cab_model_or_None).
+    A cab is auto-inserted IFF the core is a `type: preamp` (a preamp captures
+    the preamp stage only -- no power amp, no speaker -- so it needs a cab to
+    sound like an amp) AND a `--cab-model` was given AND there is no researched
+    cab already in the chain (never double a cabinet). Every other core type is
+    a complete voice and is NEVER auto-cabbed:
+
+      - `type: amp`  -- a FULL amp: a combo (speaker baked in) OR a head+cab
+        mic'd. It already includes the speaker, so adding a cab would double it.
+      - `type: body` -- an acoustic body; a guitar cab makes no sense.
+      - `type: full_rig` -- the cab is already baked into the capture.
+
+    Returns the cab model id to insert, or None.
     """
-    if amp_type == TYPE_FULL_RIG or cab_model is None:
-        return False, None
-    amp_only = assemble_blocks([], amp_model, amp_type=amp_type, cab_model=None)
-    direct = is_direct_capture(measure_fn(amp_only))
-    return direct, (cab_model if direct else None)
+    if cab_model is None or has_researched_cab:
+        return None
+    return cab_model if core_type == TYPE_PREAMP else None
 
 
 def _proximity(ref_fine, wet_fine) -> float:
@@ -643,35 +721,34 @@ def search_chain(
     full chain with the best spectral proximity to the reference.
 
     Each combo renders the FULL chain (all FIXED FX in place, flat EQ). The
-    `--cab-model` cab (a `type: cab` plugin) is auto-inserted right after the amp
-    ONLY when the amp renders DIRECT, there is no researched cab already, and the
-    amp is not `:full_rig`. `measure_fn(blocks) -> fine_ltas` renders+measures;
-    `score_fn(ref, wet)` scores proximity (defaults to the energy-weighted,
-    reliable-range metric). Returns the winning chain, the chosen gear, and the
-    ranked history.
+    `--cab-model` cab (a `type: cab` plugin) is auto-inserted right after the
+    CORE ONLY when the chosen core is a `type: preamp`, there is no researched
+    cab already, and a `--cab-model` was given -- a pure catalog-type decision
+    (`decide_cab`), with NO amp-only probe render. A `type: amp` core (combo or
+    head+cab) is never cabbed. `measure_fn(blocks) -> fine_ltas` renders+measures
+    the FULL chain; `score_fn(ref, wet)` scores proximity (defaults to the
+    energy-weighted, reliable-range metric). Returns the winning chain, the
+    chosen gear, and the ranked history.
     """
     score_fn = _proximity if score_fn is None else score_fn
     flat_eq = flat_eq_block() if flat_eq is None else flat_eq
     search_slots = [s for s in slots if s.role == ROLE_SEARCH]
     cand_lists = [s.candidates for s in search_slots]
 
-    # cab need is a property of the AMP model (measured once per amp), not the
-    # drive/combo -- cache it across combos.
-    cab_cache: dict[tuple, tuple[bool, object]] = {}
     history: list[dict] = []
     best: dict | None = None
 
     for combo in itertools.product(*cand_lists):
         blocks, info = _resolve_combo(slots, combo, flat_eq)
 
-        direct, cab_used = False, None
-        if info["amp"] and cab_model is not None and not info["has_researched_cab"]:
-            key = (info["amp"], info["amp_type"])
-            if key not in cab_cache:
-                cab_cache[key] = decide_cab(info["amp"], info["amp_type"], cab_model, measure_fn)
-            direct, cab_used = cab_cache[key]
-            if cab_used is not None and info["amp_pos"] is not None:
+        # Cab auto-insert is a pure catalog-TYPE check: only a `type: preamp`
+        # core (no power amp/speaker) is cabbed. No render-to-measure here.
+        cab_used = None
+        if info["amp"] and info["amp_pos"] is not None:
+            cab_used = decide_cab(info["amp_type"], cab_model, info["has_researched_cab"])
+            if cab_used is not None:
                 blocks.insert(info["amp_pos"] + 1, cab_block(cab_used))
+        cab_reason = "preamp" if cab_used is not None else None
 
         prox = float(score_fn(ref_fine_ltas, measure_fn(blocks)))
         rec = {
@@ -679,7 +756,7 @@ def search_chain(
             "amp_params": dict(info["amp_params"]), "drives": list(info["drives"]),
             "drive_params": [dict(p) for p in info["drive_params"]],
             "core": info["core"], "core_params": dict(info["core_params"]),
-            "direct": direct, "cab_model": cab_used,
+            "cab_reason": cab_reason, "cab_model": cab_used,
             "proximity_pct": round(prox, 2),
         }
         history.append(rec)
@@ -692,7 +769,7 @@ def search_chain(
         "amp": best["amp"], "amp_type": best["amp_type"],
         "amp_params": best["amp_params"], "drives": best["drives"],
         "drive_params": best["drive_params"], "core": best["core"],
-        "core_params": best["core_params"], "direct": best["direct"],
+        "core_params": best["core_params"], "cab_reason": best["cab_reason"],
         "cab_model": best["cab_model"], "proximity_pct": round(best["_prox"], 2),
         "blocks": best["blocks"], "history": history,
     }
@@ -754,22 +831,42 @@ def refine_eq(
 
 # --- headroom pass (render injected) ---------------------------------------
 
-def headroom_pass(preset: dict, render_peak_fn, max_iters: int = 5) -> float:
-    """Nudge the EQ output_db until the rendered DI peak lands in [-8,-6] dBFS.
+def headroom_pass(preset: dict, render_peak_fn, max_iters: int = 8) -> float:
+    """Drive the EQ output_db so the rendered DI peak lands AS HOT AS POSSIBLE
+    WITHOUT clipping -- into [PEAK_LO_DB, PEAK_HI_DB] (~ -1 dBFS), never at/above
+    0 dBFS ("max without clipping"; the chain has no limiter to catch an overshoot).
 
-    `render_peak_fn(preset) -> peak_dbfs` renders the preset and returns the
-    wet peak. The chain ends at the EQ -- level is the EQ output_db alone, no
-    limiter, no volume."""
+    `render_peak_fn(preset) -> peak_dbfs` renders the preset and returns the wet
+    peak. Each step nudges output_db by exactly the dB the peak is short of the
+    target and RE-MEASURES, so the returned peak reflects the final output_db. A
+    deep cab (manifest output_gain_db ~ -18 dB) is compensated by driving
+    output_db up to OUTPUT_MAX (+30). The chain ends at the EQ -- level is the EQ
+    output_db alone, no limiter, no volume.
+    """
     p = eq_block(preset)["params"]
-    peak_db = -120.0
+    peak_db = float(render_peak_fn(preset))
     for _ in range(max_iters):
-        peak_db = float(render_peak_fn(preset))
         if PEAK_LO_DB <= peak_db <= PEAK_HI_DB:
             break
-        p["output_db"] = round(
-            _clamp(float(p.get("output_db", 0.0)) + (PEAK_TARGET_DB - peak_db), OUTPUT_MIN, OUTPUT_MAX),
-            2,
-        )
+        cur = float(p.get("output_db", 0.0))
+        new_out = round(_clamp(cur + (PEAK_TARGET_DB - peak_db), OUTPUT_MIN, OUTPUT_MAX), 2)
+        if new_out == round(cur, 2):
+            break                       # clamped at a rail -- can't move further
+        p["output_db"] = new_out
+        peak_db = float(render_peak_fn(preset))
+
+    # Hard clip-guard: NEVER ship a preset whose peak reaches 0 dBFS. If the
+    # final measured peak is at/above 0, back output_db DOWN until it is below 0
+    # (the chain has no limiter, so a clip would otherwise survive into the WAV).
+    guard = 0
+    while peak_db >= 0.0 and round(float(p.get("output_db", 0.0)), 2) > OUTPUT_MIN and guard < 64:
+        cur = float(p.get("output_db", 0.0))
+        # step down by at least 1 dB, or further if the peak is well over 0
+        step = max(1.0, peak_db - PEAK_TARGET_DB)
+        p["output_db"] = round(_clamp(cur - step, OUTPUT_MIN, OUTPUT_MAX), 2)
+        peak_db = float(render_peak_fn(preset))
+        guard += 1
+
     return round(peak_db, 2)
 
 
@@ -783,7 +880,7 @@ def _peak_dbfs_of(wav_path: str) -> float:
     return 20.0 * math.log10(peak) if peak > 0 else -120.0
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, render_fn=None) -> int:
     ap = argparse.ArgumentParser(description="Offline single-tone OpenRig preset builder (the FORM)")
     ap.add_argument("--base-chain", required=True,
                     help="researched full-rig base-chain YAML (flat `blocks:` in signal order; "
@@ -791,9 +888,10 @@ def main(argv=None) -> int:
     ap.add_argument("--ref", required=True, help="isolated-guitar reference WAV")
     ap.add_argument("--cab-model", default="",
                     help="catalog cab PLUGIN model id (a `type: cab` plugin, e.g. ir_marshall_4x12_v30); "
-                         "auto-inserted after the amp ONLY when the amp renders direct and no researched "
-                         "cab is present (omit for a full-rig / cabbed base chain). The plugin's "
-                         "output_gain_db makes the cab level right; a raw generic_ir wav would not")
+                         "auto-inserted after the core ONLY when the core is a `type: preamp` and no "
+                         "researched cab is present (a `type: amp` full amp / combo, a `type: body`, and "
+                         "a `:full_rig` are never cabbed). Omit for an amp/full-rig/cabbed base chain. The "
+                         "plugin's output_gain_db makes the cab level right; a raw generic_ir wav would not")
     # BREAKING: the old `--cab-ir <wav>` loaded a RAW IR through generic_ir, which
     # bypasses the cab plugin's per-capture output_gain_db (renders ~18 dB hot).
     # It is replaced by `--cab-model <cab_model_id>`. Kept as a deprecated alias
@@ -836,6 +934,12 @@ def main(argv=None) -> int:
         for s in slots if s.role == ROLE_FIXED
     ]
 
+    # Pre-render GATE: validate every model id + plugin param and lint the chain
+    # against the tone policy BEFORE any render. Best-effort on --plugins-root:
+    # an unknown id / off-axis plugin param / block-level lint finding ABORTS the
+    # build (no render). Warn findings + validation warnings ride into the report.
+    gate = gate_chain(raw_blocks, args.plugins_root)
+
     out_preset = Path(args.out_preset)
     out_preset.parent.mkdir(parents=True, exist_ok=True)
     out_report = Path(args.out_report) if args.out_report else out_preset.with_suffix(".report.json")
@@ -851,7 +955,14 @@ def main(argv=None) -> int:
     counter = {"n": 0}
 
     def _render(blocks_or_preset) -> str:
-        preset = blocks_or_preset if "blocks" in blocks_or_preset else make_preset(preset_id, name, blocks_or_preset)
+        preset = (
+            blocks_or_preset
+            if isinstance(blocks_or_preset, dict) and "blocks" in blocks_or_preset
+            else make_preset(preset_id, name, blocks_or_preset)
+        )
+        # Injected render (tests): bypass the subprocess entirely.
+        if render_fn is not None:
+            return render_fn(preset)
         counter["n"] += 1
         yml = work / f"r{counter['n']:03d}.yaml"
         wav = work / f"r{counter['n']:03d}.wav"
@@ -887,7 +998,8 @@ def main(argv=None) -> int:
     # 2-3. Search the timbre slots (full chain rendered each combo).
     search = search_chain(slots, ref_fine, measure_blocks, cab_model=cab_model)
     print(f"gear: amp={search['amp']} ({search['amp_type']}) drives={search['drives']} "
-          f"core={search['core']} direct={search['direct']} proximity={search['proximity_pct']:.2f}")
+          f"core={search['core']} cab_reason={search['cab_reason']} "
+          f"proximity={search['proximity_pct']:.2f}")
 
     # 4. EQ refine on the winning full chain.
     winner = make_preset(preset_id, name, search["blocks"])
@@ -928,10 +1040,12 @@ def main(argv=None) -> int:
         "drive_params": search["drive_params"],
         "core": search["core"],
         "core_params": search["core_params"],
-        "direct": search["direct"],
+        "cab_reason": search["cab_reason"],
         "cab_model": search["cab_model"],
         "fixed_fx_preserved": fixed_fx,
         "param_provenance": param_provenance_report(slots),
+        "lint": gate["lint"],
+        "validation_warnings": gate["validation_warnings"],
         "proximity_pct": search["proximity_pct"],
         "self_floor_pct": round(self_floor, 2),
         "within": bool(refined["within"]),

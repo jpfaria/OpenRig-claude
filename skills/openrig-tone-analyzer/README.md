@@ -64,15 +64,38 @@ The loop:
    chain** (all FIXED FX present) and scores `weighted_spectral_proximity_pct`
    over the reliable range; the best combo wins. `--cab-model` auto-inserts a
    **`type: cab` PLUGIN block** (a catalog cab model id, e.g.
-   `ir_marshall_4x12_v30`) right after the amp **only** when the amp renders
-   **direct** (head-only, top octave within ~15 dB of the body), there is no
-   researched cab already, and the amp is not `:full_rig` (a full-rig capture
-   already has the cab). The cab plugin's manifest carries a per-capture
-   `output_gain_db` that the render **applies**, so the cab level is right;
+   `ir_marshall_4x12_v30`) right after the core **only** when the chosen core is
+   a **`type: preamp`** (a preamp captures the preamp stage only — no power amp,
+   no speaker — so it needs a cab), there is no researched cab already, and a
+   `--cab-model` was given. A **`type: amp`** capture is a **FULL amp** — a combo
+   (speaker baked in, e.g. `nam_fender_deluxe_reverb_a2`) OR a head+cab mic'd
+   (e.g. `nam_marshall_1959_slp_a2`) — and is **never** cabbed; a `type: body`
+   (acoustic) and a `:full_rig` are never cabbed either. The decision is a **pure
+   catalog-type check** — no render-to-measure, no top-octave heuristic; the
+   catalog `type` is authoritative. The cab plugin's manifest carries a
+   per-capture `output_gain_db` that the render **applies**, so the cab level is
+   right;
 4. **EQ refine** on the winner — a **gentle TRIM capped at ±6 dB** (not the old
    ±24); the dead-top and out-of-range bands are **held at 0**. Iterates until
    the report's `within` is true / plateau / iteration cap;
-5. **headroom** — sets the EQ `output_db` so the DI peak lands ~ −7 dBFS.
+5. **headroom** — sets the EQ `output_db` so the DI peak lands **as hot as
+   possible without clipping** (~ −1 dBFS, window [−1.5, −0.5], never reaching
+   0 dBFS — "max without clipping"). There is **no limiter**, so the old −7 dBFS
+   headroom no longer applies. The output cap is raised to **+30 dB** so the pass
+   can compensate a deep cab attenuation (a `type: cab` plugin applies its
+   manifest `output_gain_db` ≈ −18 dB; the old +12 cap could not reach the target
+   with a cab, so the preset shipped ~6–11 dB too quiet). A clip-guard backs the
+   level down if a measured peak ever reaches 0 dBFS.
+
+✅ **Pre-render validate + lint gate.** Before any render, `build_preset` builds
+the **offline catalog** (when `--plugins-root` is given) and gates the base chain:
+`validate` HARD-FAILS on an unknown model id or an off-axis plugin param (every
+candidate is expanded and checked), and `lint` HARD-FAILS on any block-level
+policy finding (e.g. an authored `limiter_brickwall`). Either aborts the build
+**before** rendering — a hallucinated id can never reach the renderer. Warn-level
+lint findings and validation warnings ride into the report under `lint` /
+`validation_warnings`. With no `--plugins-root` the gate is skipped (best-effort;
+the render-time dropped-block check remains the backstop).
 
 ⛔ **The chain ends at the EQ** — `build_preset` adds **NO brickwall limiter and
 NO volume block**, and **strips** any `limiter_brickwall` / `volume` present in
@@ -140,9 +163,10 @@ level) — it never swaps the model:
 
 A `type: amp`/`preamp`/`body` block is the CORE **whether pinned or searched** —
 it is recognised by its **type**, not by the presence of `candidates:`. A pinned
-core is the **full** core: direct-detection runs, `--cab-model` auto-inserts a cab
-when the amp renders direct (a `body` core is never cabbed), and it is recorded as
-the chosen amp/core in the report — it is **never** a FIXED pass-through. To
+core is the **full** core: `--cab-model` auto-inserts a cab **only** when the core
+is a `type: preamp` (a `type: amp` combo / head+cab and a `type: body` acoustic
+are never cabbed), and it is recorded as the chosen amp/core in the report — it
+is **never** a FIXED pass-through. To
 regulate the pinned amp's drive, give the **same** model as gain-axis candidates
 (see below): two `gain` values of one model are two variants, so the number picks
 the louder/cleaner without ever choosing a different amp. Reserve a multi-model
@@ -223,8 +247,10 @@ as if it were sourced. The proximity number never optimizes a FIXED FX param
   --out-preset /path/to/eval/<song>/presets/rhythm.yaml \
   --name "Song (rhythm)" --id song-rhythm
 # --cab-model is a catalog `type: cab` model id (NOT a wav); the render applies its
-# output_gain_db so the level is right. Optional: omit for a full-rig / cabbed base
-# chain. (The old --cab-ir <wav> is removed — it bypassed the cab normalization.)
+# output_gain_db so the level is right. It auto-inserts ONLY when the core is a
+# `type: preamp` (a `type: amp`/combo, `type: body`, and `:full_rig` are never
+# cabbed). Optional: omit for an amp / full-rig / already-cabbed base chain. (The
+# old --cab-ir <wav> is removed — it bypassed the cab normalization.)
 # --name/--id default to the base chain's own `name`/`id`.
 # Linux install: --render-bin /usr/bin/openrig-render
 #                --di         /usr/share/openrig/assets/audio/input.wav
@@ -237,8 +263,8 @@ as if it were sourced. The proximity number never optimizes a FIXED FX param
 ```
 
 The pure layer (base-chain classification, chain assembly, EQ grid, the ±6 cap +
-hold-mask, headroom normalisation, YAML round-trip, direct-capture / cab
-detection, dropped-block detection) and the injected combo-search + EQ-refine
+hold-mask, headroom normalisation, YAML round-trip, type-driven cab
+decision, dropped-block detection) and the injected combo-search + EQ-refine
 loops are unit-tested in `tests/test_build_preset.py` with the
 render/measurement calls injected, so the whole FORM is verified without the
 Rust binary or real WAVs.

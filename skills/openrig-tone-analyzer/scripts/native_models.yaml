@@ -1,0 +1,194 @@
+# NATIVE (non-plugin) OpenRig model ids — built into the app, NOT in plugin manifests.
+#
+# Enumerated deterministically from the OpenRig app source on disk:
+#   grep -rH 'pub const MODEL_ID' ~/Projetos/github.com/jpfaria/OpenRig/crates/block-*/src/*.rs
+#
+# `type` is derived from the owning crate directory (block-<kind>):
+#   block-amp -> amp, block-preamp -> preamp, block-cab -> cab, block-ir -> cab,
+#   block-gain -> gain_pedal, block-dyn -> dynamics, block-filter -> eq,
+#   block-delay -> delay, block-reverb -> reverb, block-mod -> modulation,
+#   block-wah -> wah, block-pitch -> pitch.
+#
+# These have NO offline param schema (the manifests are the only offline schema),
+# so the catalog reports params(id) == None for every id below; downstream
+# validation of native params is best-effort (warn-only), per the redesign plan.
+#
+# Regenerate when the app adds/renames a native block. Count below: 76 unique ids
+# (77 `MODEL_ID` declarations; `reverse` is declared in both block-delay and
+# block-reverb but is a single model id).
+
+# block-amp
+- id: blackface_clean
+  type: amp
+- id: chime
+  type: amp
+- id: tweed_breakup
+  type: amp
+
+# block-preamp
+- id: american_clean
+  type: preamp
+- id: brit_crunch
+  type: preamp
+- id: modern_high_gain
+  type: preamp
+
+# block-cab
+- id: american_2x12
+  type: cab
+- id: brit_4x12
+  type: cab
+- id: vintage_1x12
+  type: cab
+
+# block-ir
+- id: generic_ir
+  type: cab
+
+# block-gain
+- id: bitcrusher
+  type: gain_pedal
+- id: fuzz_ge
+  type: gain_pedal
+- id: fuzz_si
+  type: gain_pedal
+- id: half_wave_rectifier
+  type: gain_pedal
+- id: ibanez_ts9
+  type: gain_pedal
+- id: sub_octave
+  type: gain_pedal
+- id: tape_saturation
+  type: gain_pedal
+- id: transformer_saturation
+  type: gain_pedal
+- id: tube_saturation
+  type: gain_pedal
+- id: volume
+  type: gain_pedal
+- id: wavefolder
+  type: gain_pedal
+
+# block-dyn
+- id: compressor_studio_clean
+  type: dynamics
+- id: gate_basic
+  type: dynamics
+
+# block-filter
+- id: eq_eight_band_parametric
+  type: eq
+- id: eq_three_band_basic
+  type: eq
+- id: native_guitar_eq
+  type: eq
+- id: native_guitar_hpf_lpf
+  type: eq
+
+# block-delay
+- id: analog_warm
+  type: delay
+- id: bbd
+  type: delay
+- id: chorus_echo
+  type: delay
+- id: digital_clean
+  type: delay
+- id: granular
+  type: delay
+- id: modulated_delay
+  type: delay
+- id: multitap
+  type: delay
+- id: ping_pong
+  type: delay
+- id: pitch_delay
+  type: delay
+- id: reverse
+  type: delay
+- id: rhythmic
+  type: delay
+- id: slapback
+  type: delay
+- id: tape_echo
+  type: delay
+- id: tape_vintage
+  type: delay
+
+# block-reverb
+- id: cathedral
+  type: reverb
+- id: dattorro_plate
+  type: reverb
+- id: fdn_jot
+  type: reverb
+- id: freeverb_canonical
+  type: reverb
+- id: gated
+  type: reverb
+- id: hall
+  type: reverb
+- id: modulated_lush
+  type: reverb
+- id: plate_foundation
+  type: reverb
+- id: room
+  type: reverb
+- id: shimmer
+  type: reverb
+- id: spring
+  type: reverb
+- id: spring_parker_2010
+  type: reverb
+
+# block-mod
+- id: classic_chorus
+  type: modulation
+- id: ensemble_chorus
+  type: modulation
+- id: flanger_classic
+  type: modulation
+- id: flanger_jet
+  type: modulation
+- id: flanger_subtle
+  type: modulation
+- id: frequency_shifter
+  type: modulation
+- id: phaser_4stage
+  type: modulation
+- id: phaser_8stage
+  type: modulation
+- id: phaser_classic
+  type: modulation
+- id: ring_modulator
+  type: modulation
+- id: rotary_leslie
+  type: modulation
+- id: rotary_leslie_studio
+  type: modulation
+- id: rotary_leslie_vintage
+  type: modulation
+- id: stereo_chorus
+  type: modulation
+- id: tremolo_sine
+  type: modulation
+- id: vibrato
+  type: modulation
+
+# block-wah
+- id: auto_wah_classic
+  type: wah
+- id: auto_wah_dub
+  type: wah
+- id: auto_wah_funk
+  type: wah
+- id: cry_classic
+  type: wah
+- id: pitch_wah
+  type: wah
+- id: talk_box
+  type: wah
+
+# block-pitch
+- id: native_pitch_shifter
+  type: pitch

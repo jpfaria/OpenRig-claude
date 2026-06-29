@@ -1,0 +1,28 @@
+manifest_version: 1
+id: ir_marshall_4x12_v30
+display_name: Marshall 4x12 V30
+brand: marshall
+type: cab
+backend: ir
+sources:
+- https://www.tone3000.com/tones/00003
+parameters:
+- name: mic
+  display_name: Mic
+  values:
+  - sm57
+  - r121
+  - blend
+captures:
+- values:
+    mic: sm57
+  file: ir/sm57.wav
+  output_gain_db: -18.5
+- values:
+    mic: r121
+  file: ir/r121.wav
+  output_gain_db: -20.1
+- values:
+    mic: blend
+  file: ir/blend.wav
+  output_gain_db: -19.0

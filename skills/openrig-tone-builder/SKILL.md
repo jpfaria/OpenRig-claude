@@ -177,29 +177,31 @@ the loop by hand.
    PICKS among research-derived options; it **NEVER** licenses throwing unrelated
    gear into the search "to see what scores". Thin research → widen the RESEARCH
    (Step 2), not the candidate list with guesses.
-   ⛔ **AMP/PREAMP/CAB pairing is the `:full_rig` suffix + `--cab-model`, never a
-   double cab.** A head-only amp capture (`type: amp`) renders DIRECT — the engine
+   ⛔ **AMP vs PREAMP decides the cab — by TYPE, never by measurement.** A
+   `type: amp` capture is a FULL amp — a **combo** (speaker baked in, e.g.
+   `nam_fender_deluxe_reverb_a2`) OR a head+cab mic'd (e.g. `nam_marshall_1959_slp_a2`)
+   — so it **already has its speaker and NEVER takes a cab**. Only a `type: preamp`
+   capture (preamp, no power amp/speaker, e.g. `nam_marshall_jcm_800_2203_a2`) needs a
+   cab. The engine decides **by the catalog `type`**: for a `preamp` core it
    auto-inserts a **`type: cab` PLUGIN block** (a catalog cab model id, e.g.
-   `ir_marshall_4x12_v30`, supplied via `--cab-model`) right after it ONLY when
-   the amp renders direct, there is no researched cab already in the chain, and
-   the amp is not `:full_rig`. The cab plugin's manifest carries a per-capture
-   `output_gain_db` that the render **applies**, so the cab level is right — a raw
-   `generic_ir` wav would skip that normalization and land ~18 dB hot, so it is
-   the OFF-CATALOG escape only (a genuinely off-catalog IR you author directly as
-   a `{type: ir, model: generic_ir, params:{file}}` block in the base chain),
-   NEVER a stand-in for a catalog cab. Per Rule A the cab candidates are
-   research-derived catalog cab model ids. A full-rig capture already contains the
-   cab → mark the candidate `:full_rig` so the engine skips the cab. Never author
-   both a full-rig amp and a cab (that double-cabinets the tone). You do NOT
-   detect direct-vs-cab by hand — the engine measures the top octave and decides;
-   you only supply `--cab-model` (a catalog `type: cab` model id) so it has a cab
-   to insert when needed.
+   `ir_marshall_4x12_v30`, supplied via `--cab-model`) right after it — ONLY when
+   there is no researched cab already in the chain. For a `type: amp` (combo or
+   head+cab) or a `type: body` (acoustic) core it inserts NOTHING. You do NOT detect
+   this by hand and there is NO top-octave measurement — the `type` is authoritative.
+   The cab plugin's manifest carries a per-capture `output_gain_db` the render
+   **applies**, so the cab level is right — a raw `generic_ir` wav would skip that
+   normalization and land ~18 dB hot, so it is the OFF-CATALOG escape only (a
+   genuinely off-catalog IR you author directly as a
+   `{type: ir, model: generic_ir, params:{file}}` block), NEVER a stand-in for a
+   catalog cab. Per Rule A the cab candidates are research-derived catalog cab model
+   ids. Never author both an amp/preamp and a duplicate cab (double cabinet).
 4. **Run `build_preset.py`** (Step 4). It measures the reference once, searches
-   the SEARCH slots (amp × drive(s) × cab-when-direct), tunes the EQ
-   (**gentle TRIM, cap ±6 dB**; dead-top and out-of-range bands **held at 0**),
-   sets headroom on the EQ `output_db` (DI peak ≈ −7 dBFS), and emits the preset
-   YAML + a report JSON. **Below the per-song floor is not done** — read `within`
-   from the report.
+   the SEARCH slots (amp × drive(s); a cab is auto-inserted only for a `preamp`
+   core), tunes the EQ (**gentle TRIM, cap ±6 dB**; dead-top and out-of-range bands
+   **held at 0**), sets headroom on the EQ `output_db` so the DI peak lands **as hot
+   as possible without clipping** (≈ −1 dBFS, never reaching 0 — there is no limiter,
+   so the old −7 dBFS headroom no longer applies), and emits the preset YAML + a
+   report JSON. **Below the per-song floor is not done** — read `within` from the report.
    ⛔ **The chain ends at the EQ. NO brickwall limiter, NO volume block.** The
    engine **strips** any `limiter_brickwall` (model) or `volume` (type) you put in
    the base chain and never re-adds them — level/headroom is the EQ `output_db`
@@ -364,7 +366,7 @@ that is a packaging bug — stop and tell the user, do not improvise.
 ### Level is NOT timbre — the engine owns headroom, never the ref's RMS
 
 The preset's **output level is set by the engine's headroom pass** (the EQ
-`output_db`, targeting the DI peak ≈ −7 dBFS) — it is **never** matched to the
+`output_db`, targeting the DI peak ≈ −1 dBFS, hot but never clipping) — it is **never** matched to the
 reference's RMS. A real reference is often quiet (soft playing, gaps, mastering
 headroom); matching its RMS ships a broken-feeling preset. The report's
 `peak_db` is the measured DI peak you relay. Any `match_score`/`diff.json`
@@ -573,9 +575,9 @@ input.wav`. (Or `openrig://paths.data_root` + `/assets/audio/input.wav` when MCP
 is up.) You **never** ask the user for a DI.
 
 **4. Cab model (`--cab-model`, optional).** A catalog `type: cab` plugin model id
-(e.g. `ir_marshall_4x12_v30`, NOT a `.wav`) the engine auto-inserts after a direct
-amp — the cab plugin's manifest `output_gain_db` is applied, so the level is right.
-Omit for a full-rig / already-cabbed base chain.
+(e.g. `ir_marshall_4x12_v30`, NOT a `.wav`) the engine auto-inserts ONLY for a
+`type: preamp` core — the cab plugin's manifest `output_gain_db` is applied, so the
+level is right. Omit for a `type: amp` (combo/head+cab) or already-cabbed base chain.
 
 > ⛔ **`openrig-render` EXITS 0 even when it cannot build a block.** It logs
 > `ignoring unsupported or invalid block ...` / `unsupported nam model '<id>'`
@@ -1024,9 +1026,9 @@ skills/openrig-tone-analyzer/.venv/bin/python skills/openrig-tone-analyzer/scrip
 ```
 
 The engine: measures the reference once (fingerprint floor + LTAS target);
-classifies SEARCH/TUNE/FIXED; searches amp × drive(s) × cab-when-direct and
+classifies SEARCH/TUNE/FIXED; searches amp × drive(s) (a cab is auto-inserted only for a `preamp` core) and
 picks the best proximity; EQ-refines the winner (±6 cap, dead-top/out-of-range
-held); sets headroom on the EQ `output_db` (DI peak ≈ −7 dBFS); writes the
+held); sets headroom on the EQ `output_db` (DI peak ≈ −1 dBFS, hot but never clipping); writes the
 preset YAML + report JSON. It catches any silently-dropped block from the render
 output and HARD-fails — so a clean run means every researched block built.
 
@@ -1049,7 +1051,7 @@ The report JSON carries: `amp` / `amp_type` / `amp_params`, `drives` /
 3. **Match numbers**: `proximity_pct` vs `self_floor_pct`, and `within`. If
    `within` is false, say the gear plateaued below the floor and what you'll
    widen (or that the floor is the honest ceiling).
-4. **Headroom**: the report's `peak_db` (e.g. "DI peak −7.1 dBFS").
+4. **Headroom**: the report's `peak_db` (e.g. "DI peak −1.1 dBFS", max without clipping).
 5. **Unverified FX defaults**: read `param_provenance.unverified` and **surface
    each to the user** ("the comp + reverb knobs are sensible defaults, not
    sourced — tell me if you have the real values"). Never present a default as
@@ -1150,7 +1152,7 @@ electric layout, in signal order:
 2.  dynamics / <noise gate>   FIXED   research/noise-driven — include + ENABLE for a noisy high-gain NAM capture; skip a genuinely clean part
 3.  gain     / <drive(s)>     SEARCH  the DRIVE STAGE — candidates per Rule A; STACK 2-3 in series when researched
 4.  amp      / <amp>          PIN/SEARCH  EXACT capture in catalog -> PIN it {type:amp,model:X} + gain-axis variants of THAT model (number regulates gain, never swaps amp); only when no exact capture -> SEARCH stand-ins / ':full_rig' (Rule A)
-5.  (cab)                     auto    engine auto-inserts a type:cab plugin after a DIRECT amp (--cab-model, applies output_gain_db); never with :full_rig
+5.  (cab)                     auto    engine auto-inserts a type:cab plugin ONLY for a type:preamp core (--cab-model, applies output_gain_db); a type:amp (combo OR head+cab) already has its speaker → never cabbed
 6.  filter   / eq_eight_band  TUNE    the engine trims it (±6) and appends it last — you author it flat
 7.  delay    / <delay>        FIXED   time from BPM math (provenance: derived) — a tone with NO reverb AND NO delay is a research red flag
 8.  reverb   / <reverb>       FIXED   room for rhythm, hall for lead
@@ -1250,7 +1252,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
       a pinned amp to chase the number, and did NOT call a below-floor preset done
       (unless the floor IS the honest ceiling, which you reported plainly).
 - [ ] You relayed the report's `peak_db` (the engine's headroom pass set the EQ
-      `output_db` to ≈ −7 dBFS; you did NOT match the ref's RMS, did NOT add a
+      `output_db` to ≈ −1 dBFS, hot but never clipping; you did NOT match the ref's RMS, did NOT add a
       limiter/volume, did NOT hand-stage level).
 - [ ] You surfaced every `param_provenance.unverified` FX default to the user —
       no default presented as sourced.
@@ -1277,7 +1279,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   `apply_rig_nav Preset(-1)` → load → `rename_rig_preset` → `save_chain_preset`.)
 - **Authoring a `limiter_brickwall` or `volume` block** (or expecting one in the
   emitted preset). The engine STRIPS both — the chain ends at the EQ; level is
-  the EQ `output_db` alone (`peak_db` ≈ −7 dBFS).
+  the EQ `output_db` alone (`peak_db` ≈ −1 dBFS, hot but never clipping).
 - **Trusting a zero render exit as proof of a complete render.** `openrig-render`
   exits 0 even when it drops a block (`ignoring unsupported or invalid block` /
   `unsupported nam model`). `build_preset` HARD-fails on those markers
@@ -1310,9 +1312,9 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   param isn't documented or derivable, set a default, tag the block
   `provenance: unverified`, and surface it from the report's `unverified` list
   (Rule B). The proximity number never sets these feel params.
-- **Adding a cab after a `:full_rig` / cab-baked capture** (double cabinet). The
-  engine auto-inserts the cab only after a DIRECT amp; a full-rig capture already
-  has it. Mark the candidate `:full_rig`; never author both.
+- **Adding a cab after a `type: amp` capture** (a combo OR a head+cab — speaker
+  baked in) — double cabinet. The engine auto-inserts a cab ONLY for a `type: preamp`
+  core; a `type: amp` is a full amp and never gets one. Never author both.
 - **Chasing the raw `match_score`, a fixed 95, or a hand-converted dB gap.**
   Gate on the report's **`within`** (`proximity_pct ≥ self_floor_pct − 3`). The
   raw score folds in onsets/silence/level and can't converge on a real recording
@@ -1328,7 +1330,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   (it tracks *which notes were held*). Read it as directional shape cross-checked
   against the spectrogram + LTAS.
 - **Matching the reference's RMS / level.** A real reference is often quiet; the
-  engine gain-stages the DI peak to ≈ −7 dBFS independently of the ref.
+  engine gain-stages the DI peak to ≈ −1 dBFS, hot but never clipping independently of the ref.
 - **Reporting "done" without running `build_preset.py`** when a reference exists.
   This is the failure the user called out: "you're missing the most important
   thing. you should run the render." A research-only preset is a guess.
@@ -1367,7 +1369,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | Rationalization | Reality |
 |---|---|
 | "I'll hand-build it with `add_block` / hand-tune the EQ — same result" | No. `build_preset.py` is the deterministic FORM: it searches the gear, tunes the EQ within ±6, holds dead-top bands, and sets headroom in one pass. A hand loop is exactly the stale manual workflow this skill replaced. Author the base chain, run the engine, relay the report. |
-| "I'll add a safety limiter / output volume so it doesn't clip" | The engine STRIPS `limiter_brickwall` and `volume`. The chain ends at the EQ; headroom is the EQ `output_db` (DI peak ≈ −7 dBFS, report `peak_db`). Authoring either is wasted — and wrong. |
+| "I'll add a safety limiter / output volume so it doesn't clip" | The engine STRIPS `limiter_brickwall` and `volume`. The chain ends at the EQ; headroom is the EQ `output_db` (DI peak ≈ −1 dBFS, hot but never clipping, report `peak_db`). Authoring either is wasted — and wrong. |
 | "The render exited 0, so the preset is complete" | `openrig-render` exits 0 even when it drops a block (`ignoring unsupported or invalid block` / `unsupported nam model`). `build_preset` scans the output and hard-fails; a raw Step 8 render you scan yourself. Exit code alone proves nothing. |
 | "The installed app has no `openrig-render`, I'll skip the gate" | Use the dev-tree `target/release/openrig-render` with `--render-bin`, plus `--dyld-lib` (NAM dylib) and `--plugins-root <…>/plugins/source` (Step 0b). Only if NO render binary resolves do you STOP and tell the user to install/update OpenRig — never silently skip. |
 | "Proximity is stuck at 88%, that's close enough / best I can get" | The bar is the report's `within` (within ~3% of `self_floor_pct`), not a fixed 95. If 88% is below the floor, widen the researched candidate set (amp/drive/cab, gain-axis). If 88% IS within ~3% of the floor (the material's own ceiling), you're DONE — stop chasing an impossible number. |
@@ -1378,7 +1380,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | "The user says it's muffled but the number looks fine — I'll trust the number" | When the **user** says it's bad, that overrides the number — act on the specific complaint. The measurement is your default basis; the user's stated verdict is the override. |
 | "The fingerprint says delay 865 ms / 39% — I'll set the delay block to that" | `time_fx` is artifact-prone (that 865 ms was a reverb tail; the "spring" a smooth hall). Delay/reverb come from research + the song. Weak corroborator only. |
 | "The stem's centroid is ~480 Hz, the tone is dark — I'll low-pass" | On a sparse/separated stem the centroid tracks *which notes were held*, not timbre. Read it as directional shape, cross-check the spectrogram + LTAS, never low-pass off the scalar. |
-| "The reference RMS is quiet, I'll match it" | Level is never matched to the ref. The engine gain-stages the DI peak to ≈ −7 dBFS, independently of the reference. Matching RMS ships a broken preset. |
+| "The reference RMS is quiet, I'll match it" | Level is never matched to the ref. The engine gain-stages the DI peak to ≈ −1 dBFS, hot but never clipping, independently of the reference. Matching RMS ships a broken preset. |
 | "I built it from research, no need to render" | Research = educated guess. `build_preset.py` is mandatory when a reference exists; the only validated preset is one the engine rendered + measured to the floor. Clocks v1 (saved without rendering) was thrown away. |
 | "I'll toss extra amps/pedals into `candidates:` to see what scores" | Rule A: candidates are research-derived ONLY — the exact capture, documented close stand-ins, gain-axis variants of the modded capture, or a mod-matched drive. The engine picks among researched gear; it never blesses unrelated gear. Thin research → widen Step 2. |
 | "No modded capture exists, so the amp will just be under-gained" | Use the capture's own **gain-axis** as candidates: `{model, params:{gain:N}}`, one variant per axis value (Rule A). The number picks the right gain; the amp's gain IS timbre. If the capture has no axis, add a mod-matched drive candidate. |
@@ -1387,7 +1389,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | "I'll just regulate the EQ, the other blocks are fine at default" | Regulating is multi-block: the amp's gain-axis + the drive + the EQ trim all move toward the reference, and every feel block (comp/gate/delay/reverb/mod) carries researched params (Rule B), never the engine default. A run where only the EQ moved is wrong — "todos os blocos têm regulagens" (every block has adjustments). |
 | "No reverb or delay in my chain — the record was probably dry" | "Probably dry" is an assumption, not a source. Zero reverb AND zero delay is a red flag: re-research the artist's ambience or cite a source confirming it's dry. And a noisy high-gain NAM capture needs an enabled gate when its noise floor calls for it — don't ship it ungated. |
 | "I don't have the comp's exact knobs, I'll set values and move on" | Set the default, but tag the block `provenance: unverified` and surface it from the report's `unverified` list (Rule B). Never present a default as sourced. The number never sets feel params. |
-| "The record used a 4×12, so I'll author a cab after the NAM amp too" | If the amp candidate is `:full_rig`, the cab is baked in — a separate cab double-cabinets. The engine auto-inserts a cab only after a DIRECT amp (via `--cab-model`, a catalog `type: cab` plugin id). Mark `:full_rig`; supply `--cab-model` for direct amps; never author both. |
+| "The record used a 4×12, so I'll author a cab after the NAM amp too" | A `type: amp` capture (combo OR head+cab) already has its speaker — a separate cab double-cabinets. The engine auto-inserts a cab ONLY for a `type: preamp` core (via `--cab-model`, a catalog `type: cab` plugin id). Supply `--cab-model` for preamp cores; never author a cab after a `type: amp`. |
 | "I'll point `--cab-model` at a 4×12 IR `.wav` / use a `generic_ir` block for the cab" | A catalog cab is a `type: cab` PLUGIN whose manifest `output_gain_db` the render applies — that's the right level. A raw `generic_ir` wav skips that normalization and lands ~18 dB hot. `--cab-model` takes a catalog model id, never a wav; `generic_ir` is the OFF-CATALOG escape only (a genuinely off-catalog IR), authored directly in the base chain. |
 | "`tone3000-fetch` is heavy, I'll just substitute" | Cost is the user's decision. Step 2.5 leads with `tone3000-fetch`; substitution is a fallback, and even then you ask which specific substitute. They asked for THE tone, not A tone. |
 | "I'll grep `blocks-reference.md` for `vox ac30` / `streets` to find the `MODEL_ID`" | That's discovery — discovery is `openrig://plugins` / the manifests, ALWAYS. The doc is a recipe lookup keyed by `MODEL_ID`, consulted after. |
@@ -1408,8 +1410,8 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 - ❌ **Authoring `limiter_brickwall` / `volume`** — the engine strips both.
 - ❌ **A second `eq_eight_band_parametric`** — there is ONE TUNE slot; any other
   filter is a FIXED pass-through.
-- ❌ **A cab after a `:full_rig` / cab-baked capture** (double cabinet). Cab IRs
-  auto-insert only after a DIRECT amp.
+- ❌ **A cab after a `type: amp` capture** (combo or head+cab — speaker baked in).
+  A cab auto-inserts ONLY for a `type: preamp` core.
 - ❌ **`tuner_chromatic` / `spectrum_analyzer` in the chain** — rig-wide
   utilities, rejected by the runtime.
 - ❌ **Inventing a model name that "sounds right"** — every id is a hard-matched

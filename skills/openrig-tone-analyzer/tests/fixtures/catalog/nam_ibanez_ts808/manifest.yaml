@@ -1,0 +1,31 @@
+manifest_version: 1
+id: nam_ibanez_ts808_a2
+display_name: Ibanez TS808 Tube Screamer
+brand: ibanez
+type: gain_pedal
+backend: nam
+architecture: A2
+output_gain_db: -6.5
+sources:
+- https://www.tone3000.com/tones/00004
+parameters:
+- name: drive
+  display_name: Drive
+  values:
+  - 0
+  - 5
+  - 10
+- name: tone
+  display_name: Tone
+  values:
+  - 3
+  - 7
+captures:
+- values:
+    drive: 0
+    tone: 3
+  file: captures/ts808_d0_t3_a2.nam
+- values:
+    drive: 10
+    tone: 7
+  file: captures/ts808_d10_t7_a2.nam
