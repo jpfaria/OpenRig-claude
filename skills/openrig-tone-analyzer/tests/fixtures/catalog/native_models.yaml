@@ -1,8 +1,18 @@
 # Fixture native-model list (hand-written, mirrors the real native_models.yaml shape).
-# Used only by test_catalog.py; not the shipped list.
+# Used by test_catalog.py and test_resolve_gear.py; not the shipped list.
 - id: eq_eight_band_parametric
   type: eq
 - id: brit_4x12
   type: cab
 - id: compressor_studio_clean
   type: dynamics
+# FX natives: the catalog must rank these the same way it ranks plugin ids, so a
+# by-type FX (reverb/delay) resolves to a real native model rather than a model-less block.
+- id: spring
+  type: reverb
+- id: tape_echo
+  type: delay
+# An amp native present in the index must NOT out-rank a signature plugin capture
+# for that plugin's signature query (`dumble john mayer` -> the plugin still wins).
+- id: tweed_breakup
+  type: amp

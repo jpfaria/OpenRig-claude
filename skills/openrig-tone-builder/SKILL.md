@@ -26,7 +26,7 @@ back. You do ONLY this:
    You do NOT write a single model id or param path.
 4. **Run `build_preset.py --research`** (Step 4). One command: it `resolve_gear`s
    the names into catalog ids (PINNING the exact/signature capture), runs the
-   validate+lint GATE, searches the gear, trims the EQ, sets headroom, and emits
+   validate+lint GATE, searches the gear, trims the EQ, and emits
    the preset + report. If it ABORTS on `unresolved`, you fix the RESEARCH — never
    guess an id. You relay the report and persist (Step 5–6).
 
@@ -46,10 +46,13 @@ back. You do ONLY this:
 ## ⛔ THE FORM — research → `--research` → relay → persist
 
 Build EXACTLY this way, every tone, the same. The deterministic loop
-(resolve+pin → gate → gear search → EQ trim → headroom) lives in
+(resolve+pin → gate → gear search → EQ trim) lives in
 **`build_preset.py`** (the `openrig-tone-analyzer` engine). Your job is to feed it
 a correct **research JSON** and relay its **report** — never to re-narrate the
-loop by hand, never to type an id it should resolve.
+loop by hand, never to type an id it should resolve. **This is the full FORM for when
+there IS a reference WAV and you can render. With NO reference (a generic genre preset),
+or no render available, switch to the REFERENCE-LESS build below — flat EQ, the gear
+carries the tone — and skip the proximity / refine / `within` steps.**
 
 1. **Fingerprint the reference** → the honest `match_target` (analyzer schema ≥3):
    `ltas_norm_db` + `reliable_mask` + `reliable_range_hz` + `top_octave_dead` +
@@ -134,9 +137,9 @@ loop by hand, never to type an id it should resolve.
    `null` for a full amp. Never research both a full amp and a duplicate cab.
 7. **Run `build_preset.py --research`** (Step 4). It resolves+pins, gates (validate
    + lint), searches the gear (amp × drive(s); a cab auto-inserts only for a `preamp`
-   core), trims the EQ (**±6 dB cap**; dead-top/out-of-range bands held at 0), and sets
-   headroom on the EQ `output_db` so the DI peak lands **as hot as possible without
-   clipping** (≈ −1 dBFS, never 0 — there is no limiter). It emits the preset YAML + a
+   core), and trims the EQ (**±6 dB cap**; dead-top/out-of-range bands held at 0). The EQ
+   `output_db` stays **0** and the engine never writes it — level is the user's rig
+   master, not a tone control (see "Level is NOT timbre"). It emits the preset YAML + a
    report JSON. **Below the per-song floor is not done** — read `within`.
    ⛔ **The chain ends at the EQ. NO brickwall limiter, NO volume block** — the gate
    HARD-fails either (`limiter_brickwall` / `type: volume`); never put them in `fx[]`.
@@ -156,6 +159,70 @@ loop by hand, never to type an id it should resolve.
 > block the catalog can't represent), `build_preset.py --base-chain <yaml>` takes a
 > hand-authored flat `blocks:` list instead of `--research`. This is the
 > lower-level escape, not the default — the `--research` pipeline is the FORM.
+
+## ⛔ REFERENCE-LESS build — no WAV (or no render) → FLAT EQ, the gear carries the tone
+
+Sometimes there is **no reference WAV** — the user asks for a GENERIC genre preset
+("blues rhythm/lead", "a punk tone", "metal", "hard rock") with nothing to match — OR a
+reference exists but **you cannot render** (no installed `openrig-render`, or a hook blocks
+the dev-tree binary — Step 0b). The proximity loop, the EQ refine, and the `within` gate
+**do not apply**: there is no number to optimise toward. That is NOT a licence to shape the
+tone by ear.
+
+> ⛔ **You have no ears. You NEVER author EQ band gains by ear, and you NEVER set
+> `output_db`.** Hand-dialling a "genre EQ" is the documented failure of this session — it
+> produced nasal, honky, unusable tones; the user confirmed that flattening the EQ to 0
+> (and `output_db` to 0) is what made the presets usable. The researched **amp + drive +
+> cab carry the tone**; the EQ stays **FLAT** (all band gains 0) and `output_db` stays **0**.
+
+**The reference-less FORM:**
+1. **Research the gear exactly as usual** — cited, `tonedb.co` first, Rule A
+   (`resolve_gear` PINS the catalog ids). Gear choice is **unchanged**; that part works the
+   same with or without a reference. Write the research JSON the same way (Step 3).
+2. **Run `build_preset.py --research` WITHOUT `--ref`** (reference-less mode). It pins the
+   gear, runs the validate + lint GATE, and emits the preset = pinned amp/drive/cab + a
+   **FLAT `eq_eight_band_parametric`** (all band gains 0, `output_db` 0) + the FIXED FX.
+   **NO proximity loop, NO EQ refine, NO render.** The report is marked
+   `mode: reference-less`, `tunable: false`. (It still needs `--plugins-root` for
+   `resolve_gear` to pin the gear — only `--ref`/`--render-bin`/`--di` are dropped.)
+3. ⛔ **Do NOT author EQ band gains, do NOT set `output_db`.** The gear is the tone. Blind
+   EQ is forbidden here exactly as everywhere else in this skill.
+4. **State plainly to the user:** a reference-less preset is an **un-tunable STARTING
+   POINT**. It can be refined ONLY by **(a)** the user providing a reference WAV → the
+   normal proximity loop (THE FORM) then runs; OR **(b)** the user giving directional
+   **ear** feedback (next section). Absent either, it stays exactly as built.
+
+> "I built this from researched gear with a flat EQ — there was no reference to match, so I
+> won't shape the EQ blind (I can't hear it). It's a solid starting point. Give me a
+> reference WAV and I'll tune it to match, or tell me what's off by ear and I'll make ONE
+> bounded move." *(render in the user's language at runtime — English documents structure)*
+
+> **No invented genre EQ library.** Do NOT author a set of "canonical genre EQ targets" per
+> session — inventing a genre curve IS the blind-EQ this section forbids (and a tone
+> supposition the HARD RULES bar). A validated, *sourced* genre-curve library is a possible
+> FUTURE item; until such curves are measured and cited, the EQ stays flat.
+
+### Taking EAR feedback — the ONLY time you move a tone control by hand
+
+The user's ear is the **only** override (the VALIDATION GATE rule, made concrete here). You
+move a tone control by hand **only** on the user's **explicit directional word** — never on
+your own verdict (you have none), never to "improve" a preset they have not complained
+about. Map the complaint to ONE bounded, researched move, then STOP:
+
+| User says | The ONE move you make |
+|---|---|
+| "too dark" / "too bright" | ONE gentle EQ shelf/band move, **≈ ±2–3 dB** on the relevant band, then stop. |
+| "too much / too little gain or distortion" | change the **amp/drive gain-axis candidate** (a researched capture variant) or add/remove a **researched** drive — NOT blind EQ. |
+| "too thin / boxy / no body" | try a different **researched** cab or amp candidate (or a small low-mid move, ≈ ±2–3 dB, on the explicit word). |
+
+**NEVER move, ever:**
+- **`output_db`** — stays **0**; a native dB control the user has no usable handle on, not
+  a tone control.
+- **the pinned amp model** — don't swap it unless the user **rejects the amp itself**.
+
+**Absent a specific user complaint, you make NO tone move.** You do not invent one, do not
+pre-emptively brighten/darken, do not "polish". One complaint → one bounded move → stop and
+let them judge again.
 
 ## ⛔ The degraded-reference trap — when the number LIES
 
@@ -247,20 +314,24 @@ re-run — but the **pinned amp does not move** (THE FORM step 8); only if you g
 cannot reach the floor do you STOP and report both numbers. The user's ear can override
 at any point; their *silence* never lowers the bar.
 
-If the user explicitly says they have **no reference at all**, declare it **out loud
-in the chat** before saving — "no reference provided, this preset is a research-only
-guess; I cannot validate it." Silent skipping = failure. The DI is the bundled
-`<openrig-di>` (Step 0b); you never ask the user for a DI, only the wet reference.
+If the user explicitly says they have **no reference at all** (a generic genre preset), or
+you cannot render (Step 0b), do NOT blind-guess the EQ — run the **REFERENCE-LESS build**
+(flat EQ, `output_db` 0, the gear carries the tone) and declare it **out loud**: "no
+reference to match — this is an un-tunable starting point built from researched gear; give
+me a WAV or directional ear feedback to refine it." Silent skipping = failure. The DI is
+the bundled `<openrig-di>` (Step 0b); you never ask the user for a DI, only the wet
+reference.
 
-### Level is NOT timbre — the engine owns headroom, never the ref's RMS
+### Level is NOT timbre — `output_db` is ALWAYS 0, level is the user's rig master
 
-The preset's **output level is set by the engine's headroom pass** (the EQ
-`output_db`, targeting the DI peak ≈ −1 dBFS, hot but never clipping) — **never**
-matched to the reference's RMS. A real reference is often quiet (soft playing, gaps,
-mastering headroom); matching its RMS ships a broken-feeling preset. The report's
-`peak_db` is the measured DI peak you relay. Any `match_score`/`diff.json`
-recommendation about RMS or level is **ignored** for tone purposes — the headroom pass
-owns level, the proximity number owns timbre, and neither touches the other.
+The EQ `output_db` is **ALWAYS 0** — a native-plugin dB control the user has no usable
+handle on. **`build_preset` never writes it and you never author it** (not negative, not
+positive). Level is the **user's rig master**, on their own gain stage; the EQ shapes
+**tone only** (the band gains), never level. So the preset is **never** level-matched to
+the reference's RMS: a real reference is often quiet (soft playing, gaps, mastering), and
+matching its RMS ships a broken-feeling preset. Any `match_score`/`diff.json`
+recommendation about RMS or level is **ignored** for tone purposes — the proximity number
+owns timbre (the band gains), and `output_db` stays 0.
 
 ## Step −1 — Ask the user: MCP live or YAML file only?
 
@@ -421,9 +492,17 @@ binary resolves, it REQUIRES two extra inputs that map to `build_preset` flags:
 
 With a properly bundled **installed** binary, the bundle's rpath finds the dylib and
 the data root auto-resolves the bundled plugins — so `--dyld-lib` is omitted. But
-**`--research` ALWAYS requires `--plugins-root`** (it builds the catalog
-`resolve_gear` pins against). If neither an installed nor a dev `openrig-render`
-resolves, **STOP and tell the user to install/update OpenRig** — never skip the gate.
+**`--research` ALWAYS requires `--plugins-root`** (it builds the catalog `resolve_gear`
+pins against — needed even in reference-less mode).
+
+⚠️ **Render precondition + fallback.** The proximity loop needs the installed (or dev-tree)
+`openrig-render`. If the render binary does NOT resolve (GUI-only build) OR a Bash/
+folder-guard hook blocks reaching the dev-tree binary or `--plugins-root`, you **cannot
+render**. Do NOT skip the gate silently and do NOT blind-EQ to compensate. Tell the user,
+then either ask them to install/update OpenRig for a reference-matched build, OR proceed
+with the **REFERENCE-LESS build** (flat EQ, `output_db` 0, the gear carries the tone,
+un-tunable) and say so. (Reference-less still pins the gear via `--plugins-root`; if the
+catalog itself is unreachable, surface that — you cannot pin gear without it.)
 
 **3. Bundled DI (`--di`).** macOS →
 `/Applications/OpenRig.app/Contents/Resources/assets/audio/input.wav`; Linux →
@@ -471,9 +550,10 @@ caveat below.
 4. **Persist each fingerprint** into `fingerprints/ref-<role>.json` (`cp` from the
    analyzer's scratch dir). Overwrite only when the ref WAV's sha256 also matches.
 
-If the user provided **no** reference audio, skip Step 0 and declare out loud: "no
-reference WAV provided — analyzer fingerprint skipped, this preset will be research-only
-and cannot be validated objectively."
+If the user provided **no** reference audio, skip Step 0 and run the **REFERENCE-LESS
+build** (flat EQ, `output_db` 0, the gear carries the tone — see that section); declare out
+loud: "no reference WAV provided — analyzer fingerprint skipped; this is an un-tunable
+starting point from researched gear, refine it with a WAV or directional ear feedback."
 
 ### ⛔ Fingerprint reliability caveat — which fields lie, and when
 
@@ -484,7 +564,7 @@ mix** distorts the scalar fields:
 |---|---|---|
 | `band_energy` / normalized **LTAS shape** over signal-bearing windows | **Usable as SHAPE** | Directional EQ guide ("more energy 2–4 kHz") — cross-check against the spectrogram. Never a hard target. |
 | `centroid` | **Fragile** | On a sparse/separated stem it tracks *which notes were held*, not timbre. Do not low-pass off a low centroid; confirm against spectrogram + LTAS. |
-| `RMS` / loudness | **Never a target** | Reflects performance dynamics + mastering, not tone. Level is the engine's headroom pass, never matched to the ref. |
+| `RMS` / loudness | **Never a target** | Reflects performance dynamics + mastering, not tone. Level is the user's rig master, never matched to the ref; `output_db` stays 0. |
 | `time_fx` (delay/reverb) | **Low-confidence** | Artifact-prone (reverb tail → "long delay"; hall → "spring"). Delay/reverb come from research (Step 2), not this field. |
 | `gain_character` / `tone_profile` | Usable | Clean/crunch/high-gain class is robust. |
 
@@ -580,7 +660,8 @@ The rig is shared: changes via MCP are reflected in the open GUI in real time.
   DIFFERENT presets. Ask once if not given.
 - *(optional)* `<reference-audio>` — a WAV stem of the guitar (ideally isolated). Lets
   the engine run the render→compare gate. Without it you cannot validate the preset
-  objectively; flag this to the user.
+  objectively — run the **REFERENCE-LESS build** (flat EQ, the gear carries the tone) and
+  flag it to the user as an un-tunable starting point.
 
 If only `<artist>` is given, ask once for the song and role.
 
@@ -716,14 +797,18 @@ skills/openrig-tone-analyzer/.venv/bin/python skills/openrig-tone-analyzer/scrip
   --name "<Song> — <Artist> (<role>)" --id <song-slug>-<role>
 ```
 
+> **Reference-less:** omit `--ref` (and `--render-bin`/`--di`) — the engine pins the gear,
+> runs the GATE, and emits a **FLAT-EQ** preset (`output_db` 0), with NO render and NO
+> proximity loop, marked `mode: reference-less`. See the REFERENCE-LESS build section.
+
 One command does the whole pipeline: `resolve_gear` turns the names into catalog ids
 (PINNING the exact/signature capture, `candidates:` only where none exists); the
 **validate + lint GATE** hard-fails an unknown id, an off-axis plugin param, or a
 `limiter`/`volume`/policy block BEFORE any render; the gear search picks the best
-proximity (the pinned amp never swaps — the number only regulates EQ/gain-axis/drive/
-level); the EQ trim (±6 cap, dead-top/out-of-range held); the headroom pass (DI peak ≈
-−1 dBFS, never 0). It catches any silently-dropped block and HARD-fails — a clean run
-means every researched block built. It emits the preset YAML + report JSON.
+proximity (the pinned amp never swaps — the number only regulates EQ/gain-axis/drive); the
+EQ trim (±6 cap, dead-top/out-of-range held), with `output_db` left at **0**. It catches
+any silently-dropped block and HARD-fails — a clean run means every researched block built.
+It emits the preset YAML + report JSON.
 
 **If it ABORTS on `unresolved`:** `resolve_gear` could not back a researched slot — the
 gear name was wrong, too vague, or genuinely absent. **Fix the RESEARCH JSON** (tighten
@@ -757,7 +842,7 @@ the Step 5 provenance. One ask per missing capture; never a unilateral "substitu
 The report JSON carries: `amp` / `amp_type` / `amp_params`, `drives` / `drive_params`,
 `core` / `core_params`, `cab_model` / `cab_reason`, `fixed_fx_preserved`,
 **`param_provenance`** (`blocks` + `unverified`), **`lint`** + **`validation_warnings`**,
-`proximity_pct`, `self_floor_pct`, **`within`**, `best_prox`, `peak_db`,
+`proximity_pct`, `self_floor_pct`, **`within`**, `best_prox`,
 `reliable_range_hz`, `refine_history`, `gear_history`.
 
 **Chat reply provenance summary** (every build):
@@ -767,7 +852,8 @@ The report JSON carries: `amp` / `amp_type` / `amp_params`, `drives` / `drive_pa
 3. **Match numbers**: `proximity_pct` vs `self_floor_pct`, and `within`. If `within` is
    false, say the gear plateaued below the floor and what you'll widen (or that the floor
    is the honest ceiling).
-4. **Headroom**: the report's `peak_db` (e.g. "DI peak −1.1 dBFS, max without clipping").
+4. **Level**: state that `output_db` is **0** — the preset shapes tone only; level is the
+   user's own rig master, not set by the build.
 5. **Lint / validation warnings**: relay any `lint` or `validation_warnings` entry — a
    near-certain issue the gate flagged (not hard-failed).
 6. **Unverified FX defaults**: read `param_provenance.unverified` and **surface each**
@@ -903,11 +989,16 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
       floor you widened the research and re-ran — you did NOT swap a pinned amp to chase
       the number, and did NOT call a below-floor preset done (unless the floor IS the
       honest ceiling, reported plainly).
-- [ ] You relayed the report's `peak_db` (engine headroom set the EQ `output_db` to ≈ −1
-      dBFS, hot but never clipping; you did NOT match the ref's RMS, did NOT add a
-      limiter/volume, did NOT hand-stage level), the `lint`/`validation_warnings`, and
-      surfaced every `param_provenance.unverified` FX default — no default presented as
-      sourced.
+- [ ] The EQ `output_db` stayed **0** (the engine never wrote it, you never authored it;
+      level is the user's rig master — you did NOT match the ref's RMS, did NOT add a
+      limiter/volume, did NOT hand-stage level), and you relayed the `lint`/
+      `validation_warnings` and surfaced every `param_provenance.unverified` FX default —
+      no default presented as sourced.
+- [ ] **Reference-less build (no WAV / no render):** you ran `--research` WITHOUT `--ref`,
+      the EQ shipped **FLAT** (all band gains 0, `output_db` 0), you did NOT author EQ gains
+      by ear or invent a genre curve, and you told the user it's an un-tunable starting
+      point refinable only by a reference WAV or directional ear feedback. (The `within` /
+      render items above apply only when a reference exists and you can render.)
 - [ ] You did NOT set delay/reverb from `time_fx`, did NOT EQ-darken off a raw `centroid`,
       did NOT assert a sonic verdict of your own. The user's ear redirected the build ONLY
       when the user said it's bad.
@@ -927,8 +1018,8 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   never hand-author the id. (The ONE pointer: the gate HARD-fails an unknown id / off-axis
   param / `limiter`/`volume`; an `unresolved` abort means fix the RESEARCH, never guess.)
 - **Hand-building the preset with `add_block`/`set_block_parameter_*` instead of running
-  `build_preset.py --research`.** The engine owns resolve → gate → search → EQ trim →
-  headroom. Your job is the research JSON + relaying the report. (The only MCP mutations
+  `build_preset.py --research`.** The engine owns resolve → gate → search → EQ trim.
+  Your job is the research JSON + relaying the report. (The only MCP mutations
   are the Step 6 import: `apply_rig_nav Preset(-1)` → load → `rename_rig_preset` →
   `save_chain_preset`.)
 - **Guessing an id to get past an `unresolved` abort.** The abort means the gear name was
@@ -965,7 +1056,16 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 - **Treating a fragile fingerprint field as a target** — `time_fx` (a reverb tail reads
   as an 865 ms delay), a low `centroid` (tracks which notes were held → don't low-pass),
   the ref's `RMS` (performance + mastering → never matched). Delay/reverb from research;
-  centroid as directional shape vs the spectrogram; level from the headroom pass.
+  centroid as directional shape vs the spectrogram; level is the user's rig master
+  (`output_db` stays 0).
+- **Hand-authoring EQ band gains by ear on a reference-less preset** (no WAV, or no
+  render). You have no ears — leave the EQ **FLAT** (all band gains 0, `output_db` 0); the
+  researched amp + drive + cab carry the tone. Refine ONLY on the user's directional ear
+  feedback (one bounded ≈ ±2–3 dB move), never by inventing a genre EQ curve. Blind EQ
+  produced nasal/honky tones — the documented failure.
+- **Setting `output_db` to anything but 0**, matching the preset's level to the ref's RMS,
+  or hand-staging level. `output_db` stays 0; level is the user's rig master, not a tone
+  control. The EQ shapes tone only (band gains).
 - **Reporting "done" without running `build_preset.py`** when a reference exists ("you
   should run the render"). A research-only preset is a guess.
 - **Silently substituting a missing capture** instead of proposing `tone3000-fetch` first
@@ -990,8 +1090,11 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 |---|---|
 | "I'll just type the `nam_*` id myself, it's faster than naming the gear" | You NEVER type an id. `resolve_gear` greps the catalog and PINS the exact capture; the gate hard-fails a guessed id. Feed the gear NAME + signature; fix the research if it aborts. |
 | "`resolve_gear` aborted on `unresolved` — I'll feed it an id to unblock it" | The abort means the NAME was wrong/vague or the capture is genuinely missing. Tighten the name (add the artist signature), or route a real-but-missing capture through `tone3000-fetch`. An id you'd type is exactly what the abort exists to prevent. |
-| "I'll hand-build it with `add_block` / hand-tune the EQ — same result" | No. `build_preset.py --research` is the deterministic FORM: resolve+pin → gate → gear search → EQ trim (±6) → headroom, one pass. A hand loop is the stale manual workflow this skill replaced. |
-| "I'll add a safety limiter / output volume so it doesn't clip" | The GATE hard-fails `limiter_brickwall` / `type: volume`, and the engine strips them. The chain ends at the EQ; headroom is the EQ `output_db` (DI peak ≈ −1 dBFS, report `peak_db`). |
+| "I'll hand-build it with `add_block` / hand-tune the EQ — same result" | No. `build_preset.py --research` is the deterministic FORM: resolve+pin → gate → gear search → EQ trim (±6), one pass. A hand loop is the stale manual workflow this skill replaced. |
+| "I'll add a safety limiter / output volume so it doesn't clip" | The GATE hard-fails `limiter_brickwall` / `type: volume`, and the engine strips them. The chain ends at the EQ; `output_db` stays 0 and level is the user's rig master, not a tone control. |
+| "There's no reference, so I'll just dial in a genre EQ" | No. Flat EQ (all band gains 0, `output_db` 0) + researched gear; the preset is an un-tunable STARTING POINT until a reference WAV or the user's directional ear feedback. Hand-dialled genre EQ produced nasal/honky tones — the documented failure this fixes. |
+| "I'll nudge `output_db` up so it's nice and loud" | `output_db` is ALWAYS 0 — a native dB control the user has no usable handle on, not a tone control. Level is the user's rig master. The EQ shapes tone only (band gains). |
+| "I can't render, but I'll EQ it by ear to get close" | You have no ears, and no render means no number to optimise toward. Run the REFERENCE-LESS build (flat EQ, the gear carries the tone) and say it's un-tunable until they give a WAV or directional ear feedback. Never blind-EQ to compensate for a missing render. |
 | "Proximity is stuck at 88%, close enough / best I can get" | The bar is the report's `within` (within ~3% of `self_floor_pct`), not 95. If 88% is below the floor, widen the research. If 88% IS within ~3% of the floor (the material's ceiling), you're DONE — stop chasing an impossible number. |
 | "The number ranked a Fender above the John-Mayer Dumble, so I'll ship the Fender" | The number is too weak to tell amps apart — 67.81% vs 66.10% is a 1.7% noise gap, nothing cleared the floor. When the exact capture exists `resolve_gear` PINS it and the number only regulates the gain-axis; it NEVER picks the amp. A below-floor pinned chain is a degraded-ref / wrong-drive / high-floor signal you surface. |
 | "I'll just regulate the EQ, the other blocks are fine at default" | Regulating is multi-block: the amp gain-axis + the drive + the EQ trim all move, and every feel block carries researched params (Rule B), never the default. A run where only the EQ moved is wrong — "todos os blocos têm regulagens". |
@@ -1000,7 +1103,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | "I built it from research, no need to render" | Research = educated guess. `build_preset.py` is mandatory when a reference exists; the only validated preset is one the engine rendered + measured to the floor. Clocks v1 (saved without rendering) was thrown away. |
 | "I'll convert `total_gap_db` to a % / gate on the dB gap / chase `match_score`" | The report emits `proximity_pct` + `self_floor_pct` + `within` directly. Gate on `within`. `match_score` folds in level/onsets/silence and never converges on a real recording. |
 | "It sounds muffled to me, so I'll EQ-brighten / trust the number over the user" | A sonic opinion from YOU is fabrication — you have no ears; act on the measurement. But when the **user** says it's bad, that overrides the number — act on their specific complaint. |
-| "The fingerprint says delay 865 ms / centroid is low / RMS is quiet — I'll use it" | `time_fx`/`centroid`/`RMS` are fragile (an 865 ms "delay" was a reverb tail; centroid tracks which notes were held; RMS is performance + mastering). Delay/reverb come from research; centroid is directional shape only; level is the headroom pass. Never a target. |
+| "The fingerprint says delay 865 ms / centroid is low / RMS is quiet — I'll use it" | `time_fx`/`centroid`/`RMS` are fragile (an 865 ms "delay" was a reverb tail; centroid tracks which notes were held; RMS is performance + mastering). Delay/reverb come from research; centroid is directional shape only; level is the user's rig master (`output_db` stays 0). Never a target. |
 | "I'll toss extra amps/pedals into the research to see what scores" | Rule A: the research is the artist's actual gear, cited. The engine picks among research-derived options only; padding with unrelated gear to fish for a score is the anti-pattern. Thin research → dig deeper, not wider with guesses. |
 | "Only one chain matches / the user pre-confirmed it earlier" | Step 3.1 always renders the menu and waits for the pick, even with one match. Unless you can paste a verbatim "use chain X" from THIS turn, they did not pre-confirm. Cross-session memory is forbidden. |
 | "The Metallica riff is obviously high_gain — I'll skip the fingerprint / research first" | Step 0 is unconditional and comes before research. The WAV could be a cover, a different take, a clean mix; research-first biases toward what sounds right on paper. Cultural prior + "obvious" = the failure this skill blocks. |

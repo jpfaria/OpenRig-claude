@@ -239,6 +239,67 @@ def test_fx_with_unknown_typed_model_and_no_name_goes_unresolved(catalog):
     _assert_no_guessed_ids(out, catalog)
 
 
+# --- fx: a by-type FX resolves to a NATIVE model, never a model-less block -----
+
+def test_fx_reverb_spring_resolves_to_native_model(catalog):
+    # `spring` is a native reverb id -- the catalog (now native-aware) resolves it,
+    # so the reverb block carries a real model rather than being emitted model-less.
+    research = {
+        "id": "x", "name": "X", "amp": None, "drives": [], "cab": None,
+        "fx": [{"type": "reverb", "name": "spring", "params": {"mix": 14},
+                "provenance": "unverified"}],
+    }
+    out = resolve(research, catalog)
+    rev = _first(out, "reverb")
+    assert rev is not None
+    assert rev["model"] == "spring"          # the native id, NOT model-less
+    assert rev["params"] == {"mix": 14}
+    assert rev["provenance"] == "unverified"
+    assert not any(u["slot"] == "fx" for u in out["unresolved"])
+    _assert_no_guessed_ids(out, catalog)
+
+
+def test_fx_matching_nothing_goes_unresolved_and_emits_no_modelless_block(catalog):
+    # an fx whose name matches NOTHING (plugin or native) must go to `unresolved`;
+    # it must NOT fall through to a FIXED block with no `model`.
+    research = {
+        "id": "x", "name": "X", "amp": None, "drives": [], "cab": None,
+        "fx": [{"type": "reverb", "name": "zzz nonexistent gizmo xyz",
+                "params": {"mix": 9}}],
+    }
+    out = resolve(research, catalog)
+    assert _first(out, "reverb") is None
+    fx_unres = [u for u in out["unresolved"] if u["slot"] == "fx"]
+    assert len(fx_unres) == 1
+    # no block anywhere lacks BOTH a model and candidates (i.e. no model-less block)
+    for b in _blocks(out):
+        assert b.get("model") or b.get("candidates"), f"model-less block: {b}"
+    _assert_no_guessed_ids(out, catalog)
+
+
+def test_no_resolved_block_ever_lacks_a_model(catalog):
+    # a full chain: every pinned block (amp/drive/cab/eq/fx) carries a real model.
+    research = {
+        "id": "gravity", "name": "Gravity",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer"},
+        "drives": [{"name": "Ibanez TS808"}],
+        "cab": {"name": "Marshall 4x12 V30"},
+        "fx": [{"type": "reverb", "name": "spring", "params": {"mix": 14}},
+               {"type": "delay", "name": "tape echo", "params": {"time_ms": 343}},
+               {"type": "dynamics", "model": "compressor_studio_clean",
+                "params": {"ratio": 4}}],
+    }
+    out = resolve(research, catalog)
+    assert out["unresolved"] == []
+    for b in _blocks(out):
+        assert b.get("model") or b.get("candidates"), f"block without model: {b}"
+    # the by-type FX both resolved to their native ids
+    assert _first(out, "reverb")["model"] == "spring"
+    assert _first(out, "delay")["model"] == "tape_echo"
+    _assert_no_guessed_ids(out, catalog)
+
+
 # --- standalone CLI: research JSON -> base-chain YAML --------------------------
 
 def _write_research(tmp_path: Path, research: dict) -> Path:

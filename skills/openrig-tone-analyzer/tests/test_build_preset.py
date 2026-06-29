@@ -210,16 +210,17 @@ def test_apply_band_gains_caps_at_plus_minus_6():
     assert eq["band1_freq"] == 160.0    # high-pass moved
 
 
-def test_normalize_for_headroom_is_cut_biased_makeup_on_output():
+def test_apply_band_gains_leaves_output_db_at_zero_no_makeup():
+    # Native plugins have NO usable dB-level control, so the EQ output_db stays
+    # EXACTLY 0. apply_band_gains writes the tone trim (capped +/-6) to the BANDS
+    # and NEVER a cut-bias makeup offset onto output_db (normalize_for_headroom is
+    # removed). A positive band is kept as tone -- not cut-biased away.
     p = _preset_with_eq()
     bp.set_eq_grid(p)
     bp.apply_band_gains(p, [0, 6, 5, 2, 0, 4, 0, 0], hp_hz=80)
-    offset = bp.normalize_for_headroom(p)
     eq = bp.eq_block(p)["params"]
-    assert offset == 6.0
-    assert max(bp.band_gains(p)) <= 0.0 + 1e-9   # nothing boosted
-    assert eq["band2_gain"] == 0.0
-    assert eq["output_db"] == 6.0                # common-mode recovered once
+    assert eq["band2_gain"] == 6.0      # positive band kept as tone (no cut-bias)
+    assert eq["output_db"] == 0.0       # never a makeup -- output_db stays 0
 
 
 # --- YAML round-trip -------------------------------------------------------
@@ -1061,70 +1062,82 @@ def test_refine_eq_never_exceeds_plus_minus_6_and_holds_excluded_bands():
     assert gains[5] == -6.0               # unheld band drove to the -6 cap
 
 
-# --- headroom pass (injected fake render) ----------------------------------
+# --- level: the EQ is LEVEL-NEUTRAL, output_db ALWAYS 0 ----------------------
+# Native plugins have NO usable dB-level control, so build_preset NEVER writes a
+# non-zero EQ output_db (nor any other native-block dB level/output param). There
+# is NO headroom_pass (the bundled-DI render is hotter than a live input, so
+# calibrating the trim to the render's peak left live playback far too quiet) and
+# NO normalize_for_headroom (native blocks can't host a makeup dB anyway). The
+# refine band gains ship as the tone trim; output_db stays EXACTLY 0. Loudness is
+# the user's rig master.
 
-def test_headroom_pass_lands_peak_in_window():
-    p = _winning_preset()
-
-    # fake: peak tracks output_db with a fixed offset; start far below target
-    state = {"out": 0.0}
-
-    def render_peak_fn(preset):
-        out = bp.eq_block(preset)["params"]["output_db"]
-        state["out"] = out
-        return -20.0 + out   # so out=+13 -> -7 dBFS
-
-    peak = bp.headroom_pass(p, render_peak_fn, max_iters=8)
-    assert bp.PEAK_LO_DB <= peak <= bp.PEAK_HI_DB
-
-
-# --- VOLUME FIX: "max without clipping" level target -------------------------
-# The chain has NO limiter anymore, so the headroom pass pushes the DI peak as
-# hot as possible WITHOUT clipping: target ~ -1 dBFS, window [-1.5, -0.5], never
-# reaching 0 dBFS. OUTPUT_MAX is raised so a deep cab attenuation can be lifted.
-
-def test_level_constants_are_max_without_clipping():
-    # the new "max without clipping" law (no limiter -> no -7 dBFS headroom)
-    assert bp.PEAK_TARGET_DB == -1.0
-    assert (bp.PEAK_LO_DB, bp.PEAK_HI_DB) == (-1.5, -0.5)
-    # the window never touches 0 dBFS (no sample clipping)
-    assert bp.PEAK_HI_DB < 0.0
-    # OUTPUT_MAX raised so a ~-18..-24 dB cab can be compensated to the target
-    assert bp.OUTPUT_MIN == -24.0
-    assert bp.OUTPUT_MAX == 30.0
+def test_no_level_calibration_functions_or_constants():
+    # the render-peak headroom calibration AND the cut-bias makeup are REMOVED:
+    # none of these level-calibration symbols may exist anymore.
+    assert not hasattr(bp, "headroom_pass")
+    assert not hasattr(bp, "normalize_for_headroom")
+    assert not hasattr(bp, "PEAK_TARGET_DB")
+    assert not hasattr(bp, "PEAK_LO_DB")
+    assert not hasattr(bp, "PEAK_HI_DB")
 
 
-def test_headroom_pass_compensates_deep_cab_above_old_cap():
-    # a cab plugin's manifest output_gain_db (~ -18 dB) drops the chain: at
-    # output_db=0 the peak sits ~ -19 dBFS. To reach the target the pass must
-    # drive output_db ABOVE the OLD +12 cap -> proves the cab is compensated.
-    p = _winning_preset()
+def _hot_wav_factory(tmp_path: Path, scale: float = 2.0):
+    import soundfile as sf
 
-    def render_peak_fn(preset):
-        out = bp.eq_block(preset)["params"]["output_db"]
-        return -19.0 + out          # deep-cab attenuation, linear in output_db
+    rng = np.random.default_rng(7)
 
-    peak = bp.headroom_pass(p, render_peak_fn, max_iters=8)
-    out_db = bp.eq_block(p)["params"]["output_db"]
-    assert out_db > 12.0                         # above the old OUTPUT_MAX cap
-    assert bp.PEAK_LO_DB <= peak <= bp.PEAK_HI_DB
-    assert peak < 0.0                            # never clips
+    def _wav(path: Path) -> str:
+        # scale 2.0 -> |samples| up to ~8 -> peak ~ +18 dBFS (a HOT render, the
+        # case the removed headroom_pass would have CUT to chase a -1 dBFS peak).
+        sf.write(str(path), (rng.standard_normal(48000) * scale).astype("float32"), 48000)
+        return str(path)
+
+    return _wav
 
 
-def test_headroom_pass_backs_off_and_never_clips():
-    # a chain hot enough to clip at high output_db: the ideal peak would land
-    # >= 0 dBFS (modelled as a hard clip at 0). The pass must back output_db DOWN
-    # so the FINAL peak is strictly below 0 (we never ship a clipping preset).
-    p = _winning_preset()
+def test_main_ships_eq_output_db_exactly_zero_moderate(tmp_path: Path):
+    _noise = _noise_wav_factory(tmp_path)
+    _noise(tmp_path / "ref.wav")
+    _noise(tmp_path / "di.wav")
 
-    def render_peak_fn(preset):
-        out = bp.eq_block(preset)["params"]["output_db"]
-        ideal = out + 1.0           # at output_db=0 the ideal peak is +1 (clips)
-        return min(ideal, 0.0)      # digital full-scale clip at 0 dBFS
+    def fake_render(_preset) -> str:
+        return _noise(tmp_path / "r.wav")
 
-    peak = bp.headroom_pass(p, render_peak_fn, max_iters=8)
-    assert peak < 0.0                            # backed off below clipping
-    assert bp.PEAK_LO_DB <= peak <= bp.PEAK_HI_DB
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    bp.main(_main_args(base, tmp_path, **{"max-iters": 2}), render_fn=fake_render)
+
+    eq = bp.eq_block(bp.load_yaml(str(out_preset)))["params"]
+    assert eq["output_db"] == 0.0       # EXACTLY 0 -- no makeup, no calibration
+
+
+def test_main_hot_chain_is_not_cut_output_db_stays_zero(tmp_path: Path):
+    # a chain whose injected render peaks HOT (~ +18 dBFS). The REMOVED
+    # headroom_pass would cut output_db to chase a -1 dBFS render peak (pegging at
+    # the old OUTPUT_MIN=-24 for a hot chain). output_db must now stay EXACTLY 0 --
+    # never -24, never -7, never a makeup; the band gains still carry the tone.
+    _hot = _hot_wav_factory(tmp_path)
+    _hot(tmp_path / "ref.wav")
+    _hot(tmp_path / "di.wav")
+
+    def fake_render(_preset) -> str:
+        return _hot(tmp_path / "r.wav")
+
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    bp.main(_main_args(base, tmp_path, **{"max-iters": 2}), render_fn=fake_render)
+
+    eq = bp.eq_block(bp.load_yaml(str(out_preset)))["params"]
+    assert eq["output_db"] == 0.0       # hot chain NOT cut -- ships at natural level
+    assert eq["output_db"] != -24.0     # never pegged at the old OUTPUT_MIN
+    # the band gains still carry the tone trim (level untouched, tone shaped)
+    assert all(-6.0 <= eq[f"band{i}_gain"] <= 6.0 for i in range(1, 9))
 
 
 # --- Part A: pre-render validate + lint gate --------------------------------
@@ -1407,3 +1420,189 @@ def test_main_neither_research_nor_base_chain_is_arg_error(tmp_path: Path):
     ]
     with pytest.raises(SystemExit):
         bp.main(args, render_fn=lambda _p: "x.wav")
+
+
+# --- Part C: reference-less mode (no --ref, or no render binary) -------------
+# A generic / example preset ("blues rhythm", "metal", ...) has NO reference WAV
+# to match, and openrig-render may not be installed at all. build_preset must
+# NOT blind-EQ: it PINS the researched gear, leaves the EQ FLAT (every band gain
+# 0, output_db 0), renders NOTHING, and writes a report marked
+# mode=reference-less / tunable=false -- an un-tunable starting point until a
+# reference WAV or ear feedback is given. The cab auto-insert is the SAME pure
+# catalog-type decision (no render). Triggered by: --research / --base-chain
+# WITHOUT --ref, OR (with --ref) when --render-bin does not resolve to a runnable
+# binary (graceful fallback instead of a crash).
+
+def _refless_research_args(research: Path, tmp_path: Path, **extra) -> list[str]:
+    # reference-less: NO --ref, NO --render-bin, NO --di (it never renders)
+    args = [
+        "--research", str(research),
+        "--plugins-root", str(FIXTURES_CATALOG),
+        "--out-preset", str(tmp_path / "out.yaml"),
+    ]
+    for k, v in extra.items():
+        args += [f"--{k}", str(v)]
+    return args
+
+
+def _refless_base_args(base: Path, tmp_path: Path, **extra) -> list[str]:
+    args = [
+        "--base-chain", str(base),
+        "--plugins-root", str(FIXTURES_CATALOG),
+        "--out-preset", str(tmp_path / "out.yaml"),
+    ]
+    for k, v in extra.items():
+        args += [f"--{k}", str(v)]
+    return args
+
+
+def _render_must_not_be_called(_preset):
+    raise AssertionError("reference-less mode must never render")
+
+
+# -- pure assembler: pinned chain + FLAT EQ, no search, no render -------------
+
+def test_assemble_reference_less_pinned_amp_is_flat_eq_no_proximity():
+    slots = bp.classify_chain([
+        {"type": "amp", "model": "amp_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    res = bp.assemble_reference_less(slots)
+    assert res["amp"] == "amp_x"
+    eq = bp.eq_block({"blocks": res["blocks"]})["params"]
+    assert all(eq[f"band{i}_gain"] == 0.0 for i in range(1, 9))   # FLAT
+    assert eq["output_db"] == 0.0
+    # there is no reference -> no proximity / history is produced
+    assert "proximity_pct" not in res
+    assert "history" not in res
+
+
+def test_assemble_reference_less_preamp_gets_cab_pure_type_decision():
+    slots = bp.classify_chain([
+        {"type": "preamp", "model": "preamp_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    res = bp.assemble_reference_less(slots, cab_model="ir_cab")
+    assert res["cab_model"] == "ir_cab"
+    assert res["cab_reason"] == "preamp"
+    types = [b["type"] for b in res["blocks"]]
+    assert types.index("cab") == types.index("preamp") + 1
+
+
+def test_assemble_reference_less_amp_combo_never_cabbed():
+    slots = bp.classify_chain([
+        {"type": "amp", "model": "combo_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    res = bp.assemble_reference_less(slots, cab_model="ir_cab")
+    assert res["cab_model"] is None
+    assert not any(b["type"] == "cab" for b in res["blocks"])
+
+
+# -- main(): --research / --base-chain WITHOUT --ref --------------------------
+
+def test_main_research_no_ref_is_reference_less_pinned_flat_eq(tmp_path: Path):
+    research = {
+        "id": "blues", "name": "Blues Rhythm",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    out_preset = tmp_path / "out.yaml"
+    # inject a render that EXPLODES if called -> proves nothing is rendered
+    rc = bp.main(_refless_research_args(rj, tmp_path), render_fn=_render_must_not_be_called)
+    assert rc == 0
+    out = bp.load_yaml(str(out_preset))
+    amp = next(b for b in out["blocks"] if b.get("type") == "amp")
+    # the amp is the PINNED capture resolve_gear found -- the agent never typed it
+    assert amp["model"] == "nam_dumble_ods_john_mayer_a2"
+    eq = bp.eq_block(out)["params"]
+    assert all(eq[f"band{i}_gain"] == 0.0 for i in range(1, 9))   # FLAT, never blind-EQ'd
+    assert eq["output_db"] == 0.0
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert report["mode"] == "reference-less"
+    assert report["tunable"] is False
+    assert report["amp"] == "nam_dumble_ods_john_mayer_a2"
+    # there is no reference -> no proximity / within in the report
+    assert "proximity_pct" not in report
+    assert "within" not in report
+
+
+def test_main_base_chain_no_ref_is_reference_less_flat_eq(tmp_path: Path):
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "nam_dumble_ods_john_mayer_a2"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    out_preset = tmp_path / "out.yaml"
+    rc = bp.main(_refless_base_args(base, tmp_path), render_fn=_render_must_not_be_called)
+    assert rc == 0
+    eq = bp.eq_block(bp.load_yaml(str(out_preset)))["params"]
+    assert all(eq[f"band{i}_gain"] == 0.0 for i in range(1, 9))
+    assert eq["output_db"] == 0.0
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert report["mode"] == "reference-less"
+    assert report["tunable"] is False
+
+
+def test_main_reference_less_runs_gate_unresolved_amp_aborts(tmp_path: Path):
+    # reference-less STILL pins via resolve_gear: an unresolvable amp aborts (no
+    # render, no preset) -- never guess an id just because there is no reference.
+    calls: list = []
+    research = {
+        "id": "x", "name": "X",
+        "amp": {"name": "Fender Twin Reverb", "brand": "fender"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    with pytest.raises(SystemExit) as exc:
+        bp.main(_refless_research_args(rj, tmp_path),
+                render_fn=lambda _p: (calls.append(1), "x.wav")[1])
+    assert calls == []
+    assert "amp" in str(exc.value).lower()
+
+
+def test_main_reference_less_runs_gate_unknown_id_aborts(tmp_path: Path):
+    # reference-less STILL runs the validate+lint gate: an unknown model id aborts
+    calls: list = []
+    base = _write_base(tmp_path, [
+        {"type": "amp", "model": "made_up_amp_x"},
+        {"type": "filter", "model": bp.EQ_MODEL},
+    ])
+    with pytest.raises(SystemExit):
+        bp.main(_refless_base_args(base, tmp_path),
+                render_fn=lambda _p: (calls.append(1), "x.wav")[1])
+    assert calls == []
+
+
+# -- main(): --research + --ref but render binary doesn't resolve -> fallback --
+
+def test_main_research_ref_no_render_binary_falls_back_to_reference_less(tmp_path: Path):
+    # research + ref present, but --render-bin does not resolve to a runnable
+    # binary AND no render is injected -> FALL BACK to reference-less (no crash):
+    # pinned gear, flat EQ, report mode=reference-less / reason="no render binary".
+    _noise = _noise_wav_factory(tmp_path)
+    _noise(tmp_path / "ref.wav")
+    research = {
+        "id": "g", "name": "G",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer"},
+        "drives": [], "cab": None, "fx": [],
+    }
+    rj = _write_research(tmp_path, research)
+    out_preset = tmp_path / "out.yaml"
+    args = [
+        "--research", str(rj),
+        "--ref", str(tmp_path / "ref.wav"),
+        "--render-bin", str(tmp_path / "does-not-exist-render"),
+        "--plugins-root", str(FIXTURES_CATALOG),
+        "--out-preset", str(out_preset),
+    ]
+    rc = bp.main(args)   # NO render_fn -> the binary-runnable check decides the mode
+    assert rc == 0
+    report = json.loads(out_preset.with_suffix(".report.json").read_text())
+    assert report["mode"] == "reference-less"
+    assert report["reason"] == "no render binary"
+    eq = bp.eq_block(bp.load_yaml(str(out_preset)))["params"]
+    assert all(eq[f"band{i}_gain"] == 0.0 for i in range(1, 9))
+    assert eq["output_db"] == 0.0

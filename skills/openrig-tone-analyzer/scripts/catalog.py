@@ -109,7 +109,13 @@ class Catalog:
         model_id = entry.get("id")
         if not model_id:
             return
-        self._native[model_id] = {"type": entry.get("type")}
+        ntype = entry.get("type")
+        self._native[model_id] = {"type": ntype}
+        # Native ids have no manifest (no brand/display_name), so the searchable
+        # haystack is the id itself (tokenized on `_`, e.g. `tape_echo` -> {tape,
+        # echo}) plus its type, case-folded + accent-stripped like the plugin path.
+        haystack = " ".join(str(v) for v in (model_id, ntype) if v)
+        self._search_tokens[model_id] = set(_tokenize(haystack))
 
     # -- queries --------------------------------------------------------------
 
@@ -149,13 +155,15 @@ class Catalog:
         return None
 
     def find(self, query: str, type: str | None = None) -> list[Match]:
-        """Rank plugin ids by how many query tokens they match.
+        """Rank plugin AND native ids by how many query tokens they match.
 
-        Matching is case- and accent-insensitive over `id + display_name + brand`.
+        Plugins match over `id + display_name + brand`; natives match over their
+        `id` (tokenized on `_`) + `type`. Both are case- and accent-insensitive.
         Score = number of DISTINCT query tokens found in the candidate's tokens,
         so a signature phrase (`dumble john mayer`) ranks the signature capture
-        above a generic one of the same brand. `type` (e.g. `amp`) filters first.
-        Deterministic: sorted by descending score, ties broken by model_id.
+        above a generic one of the same brand, and `spring` resolves the native
+        reverb. Plugins and natives are ranked TOGETHER. `type` (e.g. `amp`,
+        `reverb`) filters first. Deterministic: descending score, ties by model_id.
         """
         q_tokens = set(_tokenize(query))
         if not q_tokens:
@@ -174,6 +182,21 @@ class Catalog:
                     type=plugin["type"],
                     brand=plugin["brand"],
                     display_name=plugin["display_name"],
+                    score=score,
+                )
+            )
+        for model_id, native in self._native.items():
+            if type is not None and native["type"] != type:
+                continue
+            score = len(q_tokens & self._search_tokens[model_id])
+            if score == 0:
+                continue
+            hits.append(
+                Match(
+                    model_id=model_id,
+                    type=native["type"],
+                    brand=None,
+                    display_name=None,
                     score=score,
                 )
             )

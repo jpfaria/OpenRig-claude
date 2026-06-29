@@ -78,14 +78,18 @@ The loop:
 4. **EQ refine** on the winner — a **gentle TRIM capped at ±6 dB** (not the old
    ±24); the dead-top and out-of-range bands are **held at 0**. Iterates until
    the report's `within` is true / plateau / iteration cap;
-5. **headroom** — sets the EQ `output_db` so the DI peak lands **as hot as
-   possible without clipping** (~ −1 dBFS, window [−1.5, −0.5], never reaching
-   0 dBFS — "max without clipping"). There is **no limiter**, so the old −7 dBFS
-   headroom no longer applies. The output cap is raised to **+30 dB** so the pass
-   can compensate a deep cab attenuation (a `type: cab` plugin applies its
-   manifest `output_gain_db` ≈ −18 dB; the old +12 cap could not reach the target
-   with a cab, so the preset shipped ~6–11 dB too quiet). A clip-guard backs the
-   level down if a measured peak ever reaches 0 dBFS.
+5. **level — the EQ is LEVEL-NEUTRAL.** Native plugins have **no usable dB-level
+   control**, so the EQ `output_db` (and every native-block dB level/output param)
+   ships at **exactly 0** — `build_preset` never writes a non-zero level. The
+   refine's band gains carry **tone only**; `output_db` stays 0. There is **no
+   render-peak headroom calibration**: the bundled-DI render is **much hotter than
+   a live input**, so calibrating the trim to make the *render* peak ≈ −1 dBFS
+   left **live playback far too quiet** (a hot high-gain chain got pegged at a
+   −24 dB cut baked into the EQ — users saw "the 8-band EQ is killing the
+   volume"). And there is **no cut-bias makeup**. The preset comes out at the
+   chain's **natural level**; **loudness is the user's rig master**. The report
+   carries `natural_peak_db` (the chain's natural rendered DI peak) as
+   **informational only** — never a calibration target.
 
 ✅ **Pre-render validate + lint gate.** Before any render, `build_preset` builds
 the **offline catalog** (when `--plugins-root` is given) and gates the base chain:
@@ -135,7 +139,7 @@ plugins and (on macOS) `libnam_wrapper.dylib` via its bundle, so
   id**. If `resolve_gear` cannot back a slot against the catalog, the build
   **ABORTS before any render**, listing each `{slot, query, reason}` — the agent
   fixes the research, never guesses an id. A resolved chain then flows through the
-  **same** validate+lint gate → gear search → EQ refine → headroom as a
+  **same** validate+lint gate → gear search → level-neutral EQ refine as a
   hand-authored base chain. `id`/`name` come from the research JSON (overridable
   with `--id`/`--name`). The full pipeline is: **research → resolve → gate →
   search → render**.
@@ -171,6 +175,45 @@ plugins and (on macOS) `libnam_wrapper.dylib` via its bundle, so
   or a hand-tuned candidate set). Fully supported; the gate and search are
   identical. The two flags are mutually exclusive: provide one, not both, not
   neither.
+
+### Reference-less mode: `--research` / `--base-chain` **without `--ref`** (or no render binary)
+
+A **generic / example** preset (`"blues rhythm"`, `"metal"`, an artist's *typical*
+rig) has **no reference WAV** to match — there is nothing to score — and
+`openrig-render` may not even be installed. In that case the tool must **NOT
+blind-EQ**. Omit `--ref` (and you may omit `--render-bin` / `--di` entirely) to
+run **reference-less mode**:
+
+```bash
+.venv/bin/python scripts/build_preset.py \
+  --research   /path/to/research.json \
+  --plugins-root /path/to/OpenRig-plugins/plugins/source \
+  --out-preset /path/to/presets/blues_rhythm.yaml
+# no --ref, no --render-bin, no --di -> it never renders
+```
+
+What reference-less mode does:
+
+1. **Pins the gear** — `resolve_gear` backs every researched slot against the
+   catalog (or, with `--base-chain`, the authored ids); an **unresolved** slot
+   still **ABORTS** (never guess an id). It then runs the **same validate + lint
+   gate** (unknown id / off-axis param / forbidden block → abort).
+2. **Assembles** the pinned chain (drive(s) → core → cab → EQ). The cab
+   auto-insert is the **same pure catalog-type decision** (a `type: preamp` core
+   gets the `--cab-model` cab — no render needed). Multi-candidate SEARCH slots
+   take their **first** candidate deterministically (nothing to score).
+3. **Leaves the EQ FLAT** — every `band{i}_gain = 0.0`, `output_db = 0.0`. The
+   researched **amp + drive(s) + cab carry the tone**; the EQ is untouched.
+4. **Renders nothing.** Writes the preset YAML + a report marked
+   `"mode": "reference-less"`, `"tunable": false`, with a `note` that this is an
+   **un-tunable starting point** until a reference WAV (the referenced path) or
+   ear feedback is provided. The report has **no** proximity / within (there is
+   no reference).
+
+**Graceful fallback.** Even on the referenced path (`--ref` given), if
+`--render-bin` does **not resolve to a runnable binary**, the build falls back to
+reference-less (report `"mode": "reference-less"`, `"reason": "no render binary"`)
+instead of crashing — you still get a usable pinned + flat-EQ preset.
 
 ### Standalone `resolve_gear.py` CLI
 
@@ -333,9 +376,9 @@ as if it were sourced. The proximity number never optimizes a FIXED FX param
 ```
 
 The pure layer (base-chain classification, chain assembly, EQ grid, the ±6 cap +
-hold-mask, headroom normalisation, YAML round-trip, type-driven cab
-decision, dropped-block detection) and the injected combo-search + EQ-refine
-loops are unit-tested in `tests/test_build_preset.py` with the
+hold-mask, the level-neutral EQ `output_db`=0 invariant, YAML round-trip,
+type-driven cab decision, dropped-block detection) and the injected combo-search
++ EQ-refine loops are unit-tested in `tests/test_build_preset.py` with the
 render/measurement calls injected, so the whole FORM is verified without the
 Rust binary or real WAVs.
 

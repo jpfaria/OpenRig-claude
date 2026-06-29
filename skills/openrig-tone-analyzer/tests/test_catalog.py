@@ -106,6 +106,41 @@ def test_find_match_has_expected_fields(catalog):
     assert m.score > 0
 
 
+# --- find: native models are ranked alongside plugins -------------------------
+
+def test_find_native_reverb_spring_is_first(catalog):
+    # FX/cabs are commonly NATIVE: find must also match native model ids, not just
+    # plugin manifests. `spring` is a native reverb id.
+    results = catalog.find("spring", type="reverb")
+    assert results, "expected a native reverb match for 'spring'"
+    assert results[0].model_id == "spring"
+    assert results[0].type == "reverb"
+    # native entries carry no brand/display_name (no manifest)
+    assert results[0].brand is None
+    assert results[0].display_name is None
+
+
+def test_find_native_delay_tape_echo(catalog):
+    # the native id `tape_echo` tokenizes on `_` -> {tape, echo}
+    results = catalog.find("tape echo", type="delay")
+    assert results, "expected a native delay match for 'tape echo'"
+    assert results[0].model_id == "tape_echo"
+
+
+def test_find_native_dynamics_studio_compressor(catalog):
+    # `compressor_studio_clean` -> {compressor, studio, clean}; the 2-token query wins
+    results = catalog.find("studio compressor", type="dynamics")
+    assert results, "expected a native dynamics match for 'studio compressor'"
+    assert results[0].model_id == "compressor_studio_clean"
+
+
+def test_native_amp_does_not_outrank_signature_plugin(catalog):
+    # a native amp (tweed_breakup) is in the index, but the signature PLUGIN capture
+    # must still rank #1 for its signature query -- natives must not displace it.
+    results = catalog.find("dumble john mayer", type="amp")
+    assert results[0].model_id == "nam_dumble_ods_john_mayer_a2"
+
+
 # --- find: case + accent insensitivity ----------------------------------------
 
 def test_find_is_case_insensitive(catalog):

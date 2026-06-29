@@ -210,25 +210,27 @@ def resolve(research: dict, catalog) -> dict:
         if model and catalog.is_known(model):
             resolved = model
         elif name:
+            # `find` is native-aware, so a by-type FX (reverb/delay/...) resolves to
+            # a NATIVE model id (e.g. `spring`) as readily as to a plugin id.
             hits = catalog.find(name, type=ftype)
             if hits:
                 resolved = hits[0].model_id
 
-        if resolved is None and model and not name:
-            # the agent TYPED a model id the catalog cannot back and gave no name
-            # to fall back on -- never trust a typed id we cannot verify.
-            unresolved.append({"slot": "fx", "query": model,
-                               "reason": "fx model id is not in the catalog"})
-            continue
-        if resolved is None and model and name:
-            # typed id unknown AND the name did not resolve either -> unresolved.
-            unresolved.append({"slot": "fx", "query": name or model,
-                               "reason": "fx not found in the catalog"})
+        if resolved is None:
+            # An fx MUST resolve to a real model (plugin OR native, via the
+            # native-aware `find`, or an explicit known `model`). If nothing
+            # resolves it goes to `unresolved` -- never a FIXED block with no
+            # `model` (a model-less block is invalid and breaks validate).
+            query = model if (model and not name) else (name or model)
+            reason = (
+                "fx model id is not in the catalog" if (model and not name)
+                else "fx not found in the catalog"
+            )
+            unresolved.append({"slot": "fx", "query": query, "reason": reason})
             continue
 
-        block: dict = {"type": ftype, "enabled": True, "params": params}
-        if resolved is not None:
-            block["model"] = resolved
+        block: dict = {"type": ftype, "model": resolved, "enabled": True,
+                       "params": params}
         # provenance rides through as a build-time helper key (build_preset reads
         # it; it is stripped from the final emitted preset). Default conservatively
         # to unverified so a sourceless FX never reads as sourced downstream.

@@ -35,11 +35,15 @@ timbre-determining slots:
   4. EQ refine on the winner: iterate render -> `next_band_gains` (CAPPED at
      +/-6 dB, dead-top / out-of-range bands HELD at 0) -> apply, until
      within-floor / plateau / iteration cap.
-  5. Headroom: set the EQ `output_db` so the DI peak lands as HOT as possible
-     WITHOUT clipping (~ -1 dBFS, "max without clipping" -- the chain has no
-     limiter, so the old -7 dBFS headroom no longer applies; the peak never
-     reaches 0 dBFS). The chain ENDS AT THE EQ -- no limiter, no volume block is
-     ever added (any `limiter_brickwall` / `volume` in the base chain is STRIPPED).
+  5. Level: the EQ is LEVEL-NEUTRAL. Native plugins have NO usable dB-level
+     control, so the EQ `output_db` -- and every native-block dB level/output
+     param -- ships at EXACTLY 0. There is NO render-peak headroom calibration
+     (the bundled-DI render is hotter than a live input, so calibrating the trim
+     to the render's peak left live playback far too quiet) and NO cut-bias
+     makeup: the refine band gains carry tone only and the preset comes out at the
+     chain's NATURAL level (loudness is the user's rig master). The chain ENDS AT
+     THE EQ -- no limiter, no volume block is ever added (any `limiter_brickwall`
+     / `volume` in the base chain is STRIPPED).
   Before any of this, a pre-render GATE validates every model id + plugin param
   against the offline catalog and lints the chain against the tone POLICY: an
   unknown id / off-axis plugin param or a block-level lint finding ABORTS the
@@ -51,9 +55,9 @@ timbre-determining slots:
 This SUPERSEDES the old `rebuild_preset.py`, which applied raw uncapped
 eq_match gains (piling low-mid, killing presence) and finalised the chain with
 a limiter + volume -- both now forbidden. The pure helpers (YAML round-trip,
-EQ grid, absolute-gain application, headroom normalisation) are salvaged from
-it but ADAPTED: the EQ trim caps at +/-6 (not +/-24) and the chain ends at the
-EQ.
+EQ grid, absolute-gain application) are salvaged from it but ADAPTED: the EQ
+trim caps at +/-6 (not +/-24), the EQ is LEVEL-NEUTRAL (output_db stays 0 -- no
+headroom calibration, no makeup), and the chain ends at the EQ.
 
 CRITICAL real-world detail: `openrig-render` exits 0 even when it cannot build
 a block -- it prints `ignoring unsupported or invalid block ...` /
@@ -185,17 +189,14 @@ GRID_HZ: list[int] = list(_common.BANDS_HZ)  # [80,160,320,640,1280,2560,5120,10
 # The EQ trim is a GENTLE shape, not a sledgehammer: cap at +/-6 dB (the old
 # rebuild_preset used +/-24, which piled low-mid and gutted presence).
 EQ_GAIN_MIN, EQ_GAIN_MAX = -6.0, 6.0
-# Level law: "max without clipping". The chain has NO limiter anymore (the old
-# -7 dBFS was limiter headroom that no longer applies), so the headroom pass
-# pushes the DI peak as HOT as possible WITHOUT clipping -- target ~ -1 dBFS,
-# accept window [-1.5, -0.5], and the peak must NEVER reach 0 dBFS (no sample
-# clipping). OUTPUT_MAX is raised to +30 so the pass can compensate a deep cab
-# attenuation: a `type: cab` plugin applies its manifest output_gain_db (~ -18 dB
-# for a 4x12 V30), so with a cab the chain drops ~18 dB -- the old +12 cap could
-# not lift it to the target and the preset shipped ~6-11 dB too quiet.
-OUTPUT_MIN, OUTPUT_MAX = -24.0, 30.0
-PEAK_TARGET_DB = -1.0
-PEAK_LO_DB, PEAK_HI_DB = -1.5, -0.5
+# Level law: the EQ is LEVEL-NEUTRAL and native plugins have NO usable dB-level
+# control, so the EQ `output_db` -- and every other native-block dB level/output
+# param -- stays EXACTLY 0. build_preset NEVER writes a non-zero level: no
+# render-peak headroom calibration (the bundled-DI render is hotter than a live
+# input, so calibrating the trim to the render's peak left live playback far too
+# quiet) and no cut-bias makeup offset. The shipped EQ carries band gains + freqs
+# (tone only); loudness is the user's rig master. There is no limiter, so a +6 dB
+# band cannot clip into anything -- no makeup is needed.
 
 # The gate is "within this many % of the reference's own self-floor".
 SELF_FLOOR_MARGIN_PCT = 3.0
@@ -582,22 +583,6 @@ def apply_band_gains(preset: dict, new_gains, hp_hz) -> None:
     p["band1_freq"] = float(hp_hz)
 
 
-def normalize_for_headroom(preset: dict) -> float:
-    """Gain-normalise the EQ: subtract the max positive band gain so the curve
-    is cut-biased (nothing boosted), recovering that common-mode level once on
-    the EQ output_db. Returns the offset removed."""
-    p = eq_block(preset)["params"]
-    gains = [float(p[f"band{i}_gain"]) for i in range(1, len(GRID_HZ) + 1)]
-    offset = max(gains)
-    if offset <= 0:
-        return 0.0
-    for i in range(1, len(GRID_HZ) + 1):
-        p[f"band{i}_gain"] = round(_clamp(gains[i - 1] - offset, EQ_GAIN_MIN, EQ_GAIN_MAX), 2)
-    cur = float(p.get("output_db", 0.0))
-    p["output_db"] = round(_clamp(cur + offset, OUTPUT_MIN, OUTPUT_MAX), 2)
-    return offset
-
-
 # --- hold mask -------------------------------------------------------------
 
 def coarse_hold_mask(ref_8band_ltas, reliable_range_hz) -> np.ndarray:
@@ -775,6 +760,44 @@ def search_chain(
     }
 
 
+# --- reference-less assembly (no reference, no render) ----------------------
+
+def assemble_reference_less(slots: list[Slot], cab_model=None, flat_eq: dict | None = None) -> dict:
+    """Deterministically assemble the PINNED chain with a FLAT EQ -- NO search,
+    NO render, NO proximity. The reference-less path: a generic / example preset
+    has no reference WAV to match (and openrig-render may not even be installed),
+    so the tool must NOT blind-EQ. It pins the researched gear and leaves the EQ
+    flat (every band gain 0, output_db 0); the researched amp + drive(s) + cab
+    carry the tone.
+
+    Each SEARCH slot takes its FIRST candidate verbatim (research pins a single id
+    per slot; a multi-candidate base chain cannot be scored without a reference,
+    so the first candidate is taken deterministically). The `--cab-model` cab is
+    auto-inserted by the SAME pure catalog-type decision as the referenced path
+    (`decide_cab` -- no render, no measurement). Returns the chosen gear + the
+    flat-EQ chain (no `proximity_pct` / `history` -- there is nothing to score).
+    """
+    flat_eq = flat_eq_block() if flat_eq is None else flat_eq
+    search_slots = [s for s in slots if s.role == ROLE_SEARCH]
+    combo = tuple(s.candidates[0] for s in search_slots)
+    blocks, info = _resolve_combo(slots, combo, flat_eq)
+
+    cab_used = None
+    if info["amp"] and info["amp_pos"] is not None:
+        cab_used = decide_cab(info["amp_type"], cab_model, info["has_researched_cab"])
+        if cab_used is not None:
+            blocks.insert(info["amp_pos"] + 1, cab_block(cab_used))
+    cab_reason = "preamp" if cab_used is not None else None
+
+    return {
+        "amp": info["amp"], "amp_type": info["amp_type"],
+        "amp_params": dict(info["amp_params"]), "drives": list(info["drives"]),
+        "drive_params": [dict(p) for p in info["drive_params"]],
+        "core": info["core"], "core_params": dict(info["core_params"]),
+        "cab_reason": cab_reason, "cab_model": cab_used, "blocks": blocks,
+    }
+
+
 # --- EQ-refine loop (render/measure injected) ------------------------------
 
 def refine_eq(
@@ -829,48 +852,22 @@ def refine_eq(
     }
 
 
-# --- headroom pass (render injected) ---------------------------------------
-
-def headroom_pass(preset: dict, render_peak_fn, max_iters: int = 8) -> float:
-    """Drive the EQ output_db so the rendered DI peak lands AS HOT AS POSSIBLE
-    WITHOUT clipping -- into [PEAK_LO_DB, PEAK_HI_DB] (~ -1 dBFS), never at/above
-    0 dBFS ("max without clipping"; the chain has no limiter to catch an overshoot).
-
-    `render_peak_fn(preset) -> peak_dbfs` renders the preset and returns the wet
-    peak. Each step nudges output_db by exactly the dB the peak is short of the
-    target and RE-MEASURES, so the returned peak reflects the final output_db. A
-    deep cab (manifest output_gain_db ~ -18 dB) is compensated by driving
-    output_db up to OUTPUT_MAX (+30). The chain ends at the EQ -- level is the EQ
-    output_db alone, no limiter, no volume.
-    """
-    p = eq_block(preset)["params"]
-    peak_db = float(render_peak_fn(preset))
-    for _ in range(max_iters):
-        if PEAK_LO_DB <= peak_db <= PEAK_HI_DB:
-            break
-        cur = float(p.get("output_db", 0.0))
-        new_out = round(_clamp(cur + (PEAK_TARGET_DB - peak_db), OUTPUT_MIN, OUTPUT_MAX), 2)
-        if new_out == round(cur, 2):
-            break                       # clamped at a rail -- can't move further
-        p["output_db"] = new_out
-        peak_db = float(render_peak_fn(preset))
-
-    # Hard clip-guard: NEVER ship a preset whose peak reaches 0 dBFS. If the
-    # final measured peak is at/above 0, back output_db DOWN until it is below 0
-    # (the chain has no limiter, so a clip would otherwise survive into the WAV).
-    guard = 0
-    while peak_db >= 0.0 and round(float(p.get("output_db", 0.0)), 2) > OUTPUT_MIN and guard < 64:
-        cur = float(p.get("output_db", 0.0))
-        # step down by at least 1 dB, or further if the peak is well over 0
-        step = max(1.0, peak_db - PEAK_TARGET_DB)
-        p["output_db"] = round(_clamp(cur - step, OUTPUT_MIN, OUTPUT_MAX), 2)
-        peak_db = float(render_peak_fn(preset))
-        guard += 1
-
-    return round(peak_db, 2)
-
-
 # --- real subprocess wiring (CLI) ------------------------------------------
+
+def _render_bin_runnable(path: str | os.PathLike | None) -> bool:
+    """True if `path` resolves to a runnable openrig-render binary (found on PATH
+    or an executable file on disk). The reference-less fallback uses this: when a
+    render is required (the referenced path) but the binary is absent / not
+    installed, the build falls back to reference-less instead of crashing."""
+    if not path:
+        return False
+    import shutil
+
+    if shutil.which(str(path)):
+        return True
+    p = Path(path)
+    return p.is_file() and os.access(str(p), os.X_OK)
+
 
 def _peak_dbfs_of(wav_path: str) -> float:
     import soundfile as sf
@@ -896,7 +893,10 @@ def main(argv=None, *, render_fn=None) -> int:
                         help="researched full-rig base-chain YAML (flat `blocks:` in signal order; "
                              "SEARCH slots carry `candidates:`, the eq_eight_band filter is TUNED). "
                              "The lower-level escape path for manual / off-catalog authoring")
-    ap.add_argument("--ref", required=True, help="isolated-guitar reference WAV")
+    ap.add_argument("--ref", default="",
+                    help="isolated-guitar reference WAV. OMIT it for REFERENCE-LESS mode: a "
+                         "generic / example preset with no reference to match -> pin the gear, "
+                         "leave the EQ FLAT, render nothing (the agent never blind-EQs)")
     ap.add_argument("--cab-model", default="",
                     help="catalog cab PLUGIN model id (a `type: cab` plugin, e.g. ir_marshall_4x12_v30); "
                          "auto-inserted after the core ONLY when the core is a `type: preamp` and no "
@@ -908,8 +908,13 @@ def main(argv=None, *, render_fn=None) -> int:
     # It is replaced by `--cab-model <cab_model_id>`. Kept as a deprecated alias
     # that ERRORS with a pointer (a raw wav must NOT be accepted as a cab model).
     ap.add_argument("--cab-ir", default="", help=argparse.SUPPRESS)
-    ap.add_argument("--render-bin", required=True, help="path to the installed openrig-render")
-    ap.add_argument("--di", required=True, help="bundled DI WAV (assets/audio/input.wav)")
+    ap.add_argument("--render-bin", default="",
+                    help="path to the installed openrig-render. Only the referenced path renders; "
+                         "if it does not resolve to a runnable binary the build falls back to "
+                         "REFERENCE-LESS (pinned gear + flat EQ, no render) instead of crashing")
+    ap.add_argument("--di", default="",
+                    help="bundled DI WAV (assets/audio/input.wav). Only needed for the referenced "
+                         "(rendering) path -- reference-less mode never renders")
     ap.add_argument("--plugins-root", default="",
                     help="override plugins root (OPENRIG_PLUGINS_ROOT); omit with the installed binary")
     ap.add_argument("--dyld-lib", default="",
@@ -978,6 +983,63 @@ def main(argv=None, *, render_fn=None) -> int:
     out_preset = Path(args.out_preset)
     out_preset.parent.mkdir(parents=True, exist_ok=True)
     out_report = Path(args.out_report) if args.out_report else out_preset.with_suffix(".report.json")
+
+    # REFERENCE-LESS mode -- pin the gear, leave the EQ FLAT, render NOTHING.
+    # Triggered when there is no reference to match (no --ref), OR when a render
+    # IS required (the referenced path) but no runnable render binary is available
+    # (and none injected) -- a graceful fallback instead of a crash. A generic /
+    # example preset has nothing to score and may have no openrig-render installed,
+    # so the tool must NOT blind-EQ: the researched amp + drive(s) + cab carry the
+    # tone and the EQ stays flat (every band gain 0, output_db 0) -- an un-tunable
+    # starting point until a reference WAV or ear feedback is given.
+    render_available = render_fn is not None or _render_bin_runnable(args.render_bin)
+    reference_less = (not args.ref) or (not render_available)
+    if reference_less:
+        refless_reason = None if not args.ref else "no render binary"
+        assembled = assemble_reference_less(slots, cab_model=cab_model)
+        final = make_preset(preset_id, name, assembled["blocks"])
+        set_eq_grid(final)                                  # FLAT grid, gains 0, output_db 0
+        final["blocks"] = strip_forbidden(final["blocks"])  # chain ends at the EQ
+        dump_yaml(final, str(out_preset))
+        report = {
+            "id": preset_id,
+            "name": name,
+            "mode": "reference-less",
+            "tunable": False,
+            "amp": assembled["amp"],
+            "amp_type": assembled["amp_type"],
+            "amp_params": assembled["amp_params"],
+            "drives": assembled["drives"],
+            "drive_params": assembled["drive_params"],
+            "core": assembled["core"],
+            "core_params": assembled["core_params"],
+            "cab_reason": assembled["cab_reason"],
+            "cab_model": assembled["cab_model"],
+            "fixed_fx_preserved": fixed_fx,
+            "param_provenance": param_provenance_report(slots),
+            "lint": gate["lint"],
+            "validation_warnings": gate["validation_warnings"],
+            # there is NO reference -> no proximity / within / self-floor / peak.
+            # The EQ is FLAT and level-neutral (output_db 0). This preset is an
+            # un-tunable STARTING POINT: pass a reference WAV (the referenced path)
+            # or give ear feedback to tune it.
+            "eq_output_db": 0.0,
+            "note": "Pinned gear + FLAT EQ, no render. Un-tunable starting point "
+                    "until a reference WAV or ear feedback is provided -- the agent "
+                    "never blind-EQs without something to match.",
+            "preset_path": str(out_preset),
+        }
+        if refless_reason:
+            report["reason"] = refless_reason
+        out_report.write_text(json.dumps(_common.round_for_json(report), indent=2), encoding="utf-8")
+        print(json.dumps({"preset": str(out_preset), "report": str(out_report),
+                          "mode": "reference-less", "tunable": False,
+                          **({"reason": refless_reason} if refless_reason else {})}))
+        return 0
+
+    # --- referenced path: full proximity search + level-neutral EQ refine ----
+    if not args.di:
+        raise SystemExit("the referenced path (--ref) requires --di (the bundled DI WAV to render through)")
     work = out_preset.parent / f".{preset_id}-build"
     work.mkdir(parents=True, exist_ok=True)
 
@@ -1053,15 +1115,23 @@ def main(argv=None, *, render_fn=None) -> int:
                         max_iters=args.max_iters)
     final = refined["final_preset"]
 
-    # 5. Headroom -- chain ends at the EQ (no limiter, no volume). Strip any
-    # forbidden block defensively before writing.
-    normalize_for_headroom(final)
+    # 5. Level -- the EQ is LEVEL-NEUTRAL. Native plugins have NO usable dB-level
+    # control, so the EQ output_db (set to 0 by set_eq_grid and never touched by
+    # the refine, which only moves band gains + the high-pass cutoff) stays
+    # EXACTLY 0: NO render-peak headroom calibration (the bundled-DI render is
+    # hotter than a live input, so calibrating the trim to it would leave live
+    # playback far too quiet) and NO cut-bias makeup. The preset ships at the
+    # chain's NATURAL level -- band gains shape tone, output_db is 0, loudness is
+    # the user's rig master. Strip any forbidden block defensively before writing.
+    final["blocks"] = strip_forbidden(final["blocks"])
 
     def render_peak(preset) -> float:
         return _peak_dbfs_of(_render(preset))
 
-    peak_db = headroom_pass(final, render_peak)
-    final["blocks"] = strip_forbidden(final["blocks"])
+    # Informational ONLY: the natural rendered DI peak. It is NEVER a calibration
+    # target (no level param is driven from it) -- it just records the chain's
+    # natural level in the report.
+    peak_db = round(render_peak(final), 2)
 
     # 6. Write outputs.
     dump_yaml(final, str(out_preset))
@@ -1085,7 +1155,11 @@ def main(argv=None, *, render_fn=None) -> int:
         "self_floor_pct": round(self_floor, 2),
         "within": bool(refined["within"]),
         "best_prox": refined["best_prox"],
-        "peak_db": peak_db,
+        # the EQ is LEVEL-NEUTRAL: output_db ships at 0 (native blocks have no
+        # usable dB-level control); `natural_peak_db` is the chain's natural
+        # rendered DI peak, INFORMATIONAL only -- never a calibration target.
+        "eq_output_db": 0.0,
+        "natural_peak_db": peak_db,
         "reliable_range_hz": reliable_range,
         "refine_history": refined["history"],
         "gear_history": search["history"],
@@ -1094,7 +1168,7 @@ def main(argv=None, *, render_fn=None) -> int:
     out_report.write_text(json.dumps(_common.round_for_json(report), indent=2), encoding="utf-8")
     print(json.dumps({"preset": str(out_preset), "report": str(out_report),
                       "proximity_pct": search["proximity_pct"], "within": refined["within"],
-                      "peak_db": peak_db}))
+                      "eq_output_db": 0.0, "natural_peak_db": peak_db}))
     return 0
 
 
