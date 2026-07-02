@@ -54,7 +54,7 @@ midi-profile-builder ──▶ foot-controller profile to switch presets live
 
 ```
 /plugin marketplace add jpfaria/OpenRig-claude
-/plugin install openrig@openrig
+/plugin install claude-plugin@openrig
 ```
 
 Start OpenRig with the MCP server on:
@@ -81,7 +81,7 @@ Settings → **Connectors** → Add custom connector → URL `http://127.0.0.1:4
 ## Update
 
 ```
-/plugin update openrig@openrig
+/plugin update claude-plugin@openrig
 ```
 
 Or enable **auto-update** for the marketplace in the `/plugin` UI (Marketplaces tab → select `openrig` → Enable auto-update). The client refreshes on session start.

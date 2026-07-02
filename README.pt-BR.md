@@ -54,7 +54,7 @@ midi-profile-builder ──▶ profile do controlador de chão para trocar prese
 
 ```
 /plugin marketplace add jpfaria/OpenRig-claude
-/plugin install openrig@openrig
+/plugin install claude-plugin@openrig
 ```
 
 Suba o OpenRig com o servidor MCP ligado:
@@ -81,7 +81,7 @@ Settings → **Connectors** → Add custom connector → URL `http://127.0.0.1:4
 ## Atualização
 
 ```
-/plugin update openrig@openrig
+/plugin update claude-plugin@openrig
 ```
 
 Ou habilite **auto-update** para o marketplace no painel `/plugin` (aba Marketplaces → selecione `openrig` → Enable auto-update). O cliente atualiza na inicialização da sessão.
