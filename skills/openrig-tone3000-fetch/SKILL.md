@@ -1,13 +1,15 @@
 ---
 name: openrig-tone3000-fetch
-description: "Use when the user asks to discover, search, or import IR/NAM packs from tone3000.com into OpenRig-plugins (\"novidades do tone3000\", \"latest tone3000 packs\", \"procura IR de Mesa Rectifier no tone3000\", \"import tone3000 <id>\", \"traz o pack <id>\"). Drives the Supabase API of tone3000.com directly via curl + writes the draft manifest, then hands off to the OpenRig-plugins dev-flow LAW (issue → .solvers/issue-N → qa_audit/pack_plugins gate → PR)."
+description: "Use when the user asks to discover, search, or import IR/NAM packs from tone3000.com into OpenRig-plugins (\"novidades do tone3000\", \"latest tone3000 packs\", \"procura IR de Mesa Rectifier no tone3000\", \"import tone3000 <id>\", \"traz o pack <id>\"). Drives the Supabase API of tone3000.com directly via curl + writes the draft manifest into a caller-provided directory. API and draft manifest only — nothing else."
 ---
 
 # tone3000 fetch
 
 Discover, search, and import IR / NAM packs from
-[tone3000.com](https://www.tone3000.com) into a local checkout of
-[OpenRig-plugins](https://github.com/jpfaria/OpenRig-plugins).
+[tone3000.com](https://www.tone3000.com) as a draft
+[OpenRig-plugins](https://github.com/jpfaria/OpenRig-plugins) manifest,
+written into a directory the caller provides. The caller owns the
+dev-flow (issue, clone, gate, PR) — this skill does not.
 
 No native binary. The work is **curl** against the tone3000 Supabase
 API (public anon JWT, no user account) plus **Write** for the draft
@@ -16,32 +18,32 @@ is a **fallback** for steps where the API surface is insufficient (rare).
 
 ## Iron rules
 
-1. **NEVER touch the user's main OpenRig-plugins checkout.** Every
-   import runs in a fresh `.solvers/issue-N/` **independent clone** per
-   the OpenRig-plugins dev-flow LAW. `git worktree` is FORBIDDEN —
-   worktrees share the parent `.git` (refs, index, hooks) and break the
-   isolation guarantee; use a clone.
+1. **NEVER write into the OpenRig-plugins working tree.** The skill
+   writes the draft into a directory passed by the caller (`$SOURCE`);
+   the caller owns where that directory lives (a clone, a `.solvers/`
+   dir — not this skill's concern) and everything git-related.
 2. **The user picks the tone.** Even when listing "novidades", show
    the candidates and let the user choose; never import a guess.
 3. **Inference misses become `# TODO:` YAML comments** in the
    generated manifest. The user must resolve them before running
    the gate. Do not silently fabricate parameter axes.
-4. **Validation is `qa_audit` + `pack_plugins`, not your ear.**
-   Asking the user "does it sound better now?" is forbidden — see
-   the `openrig-code-quality` skill in OpenRig-plugins. The gate is
-   the only acceptable acceptance signal.
-5. **English everywhere** in the generated manifest (id, comments,
-   commit messages) — repo LAW. Live chat stays in the user's
-   language.
+4. **Never validate by ear.** Asking the user "does it sound better
+   now?" is forbidden. The acceptance signal is the OpenRig-plugins
+   gate, which the **caller** runs (see the `openrig-code-quality`
+   skill in OpenRig-plugins) — not this skill.
+5. **English everywhere** in the generated manifest (id, comments) —
+   repo LAW. Live chat stays in the user's language.
 
 ## Required inputs
 
 Ask the user once per session, then remember:
 
-- **`PLUGINS_REPO`** — absolute path to their OpenRig-plugins checkout
-  (e.g. `/Users/<u>/Projetos/.../OpenRig-plugins`). If they don't have
-  one, send them to
-  `https://github.com/jpfaria/OpenRig-plugins` to clone it first.
+- **`$SOURCE`** — the caller-provided OpenRig-plugins `plugins/source`
+  directory to write the draft pack into (e.g. a fresh clone at
+  `/…/OpenRig-plugins/plugins/source`, or a `.solvers/issue-N/…` path the
+  caller set up). The skill writes ONLY under `$SOURCE/<kind>/<slug>` and
+  reads it to mark candidates `imported`/`new`. It never creates that
+  directory's clone, branch, or issue — the caller owns all of that.
 
 ## Tone3000 API surface (verified)
 
@@ -99,7 +101,7 @@ curl -sS -X POST \
 **Annotate local status** by grepping the user's repo:
 
 ```bash
-grep -rl "tone3000.com/tones/<id>$" "$PLUGINS_REPO/plugins/source"
+grep -rl "tone3000.com/tones/<id>$" "$SOURCE"
 ```
 
 If any path is returned → status is `imported`; else `new`.
@@ -152,36 +154,19 @@ NAM amp/pedal captures are not subject to this — it is a cab-IR concern.
 #### 1 — Confirm intent
 
 Print the tone title, gear, model count, and the chosen slug to the
-user. Ask for confirmation before downloading. Imported once = one
-issue + one PR in OpenRig-plugins.
+user. Ask for confirmation before downloading. One tone = one draft.
 
-#### 2 — Open OpenRig-plugins issue + isolated clone
+#### 2 — Destination
 
-```bash
-cd "$PLUGINS_REPO"
-ISSUE=$(gh issue create \
-  --title "import tone3000 <id>: <pack title>" \
-  --body "Source: https://www.tone3000.com/tones/<id>. Imported via openrig-tone3000-fetch skill (jpfaria/OpenRig-claude)." \
-  | grep -oE '[0-9]+$')
-mkdir -p .solvers
-# Independent clone — NOT `git worktree` (worktrees share the parent
-# .git and break isolation). Cleanup is `rm -rf` of the dir.
-git clone . ".solvers/issue-$ISSUE"
-cd ".solvers/issue-$ISSUE"
-git remote set-url origin git@github.com:jpfaria/OpenRig-plugins.git
-git fetch origin main && git reset --hard origin/main
-git checkout -b "feature/issue-$ISSUE"
-WORK="$PLUGINS_REPO/.solvers/issue-$ISSUE"
-```
-
-All file ops below happen under `$WORK`. **Never** under
-`$PLUGINS_REPO/plugins/source/` directly.
+The caller provides the target path (`$SOURCE`); the skill writes there.
+It never creates an issue, clone, or branch, and never touches anything
+outside `$SOURCE`.
 
 #### 3 — Resolve `kind` and `slug`
 
 - `kind` = `nam` if the first `model_url` ends with `.nam`, else `ir`.
 - `slug` = `<brand>_<short-model>`, lowercased, non-alphanumerics → `_`, collapsed. Brand = first word of `makes[0]` from the tone detail, or first word of `title` if `makes` is empty.
-- If `$WORK/plugins/source/$kind/$slug` exists, suffix `_2`, `_3`, …
+- Resolve the pack dir `TARGET="$SOURCE/$kind/$slug"`; if it exists, suffix `_2`, `_3`, … All writes below happen under `$TARGET` — nothing else is touched.
 
 #### 4 — Download captures
 
@@ -300,7 +285,7 @@ How to apply:
   A SINGLE axis is the last resort, only for genuinely non-factorable
   packs — and even then with CLEAN stripped values, never raw filenames.
 - Single-capture plugin → value `default`. NEVER emit an empty value:
-  `pack_plugins` rejects it with "did not match any variant of untagged
+  the packer rejects it with "did not match any variant of untagged
   enum ParameterValue".
 - Validate before the gate: every capture file mapped exactly once;
   every captures value declared in `parameters[].values`; value combos
@@ -337,36 +322,30 @@ applies to any axis-less capture (`parameters: []`): the empty map is
 **Do NOT write `output_gain_db`** — that is computed by
 `loudness_audit` in OpenRig-plugins.
 
-#### 6 — Hand off to the user
+#### 6 — Hand off
 
 Print:
 
 ```
-Imported to $TARGET.
-Next steps (run inside $WORK):
-  1) Open $TARGET/manifest.yaml; resolve every '# TODO:' line.
-  2) cargo build --release -p loudness-audit --bin qa_audit
-  3) cargo run --release --bin pack_plugins
-  4) git add . && git commit -m "feat(plugins): import tone3000 <id> (#$ISSUE)"
-  5) gh issue comment $ISSUE --body "Push <sha>: pack_plugins gate: <result>."
-  6) git push -u origin feature/issue-$ISSUE; gh pr create --base main --head feature/issue-$ISSUE
+Draft written to $TARGET. Resolve every '# TODO:' line in
+$TARGET/manifest.yaml before the gate.
 ```
 
-The skill stops here. The user owns the gate, the manifest cleanup, and the PR.
+The skill stops here. The caller owns the rest of the dev-flow — the
+manifest cleanup, the gate, and the PR (see the `openrig-code-quality`
+skill in OpenRig-plugins).
 
 ## Anti-patterns
 
 - ❌ A single `model` parameter axis whose values are raw capture filenames — infer real axes from the names (see step 5). This is the #1 import defect.
-- ❌ An empty parameter value (`- ` / `model: `) — breaks `pack_plugins` (ParameterValue enum). Single-capture → `default`.
-- ❌ `git worktree add` for `.solvers/issue-N` — use an independent clone (worktrees share the parent `.git`).
-- ❌ Writing into `$PLUGINS_REPO/plugins/source/` directly (must be `$WORK/…`).
+- ❌ An empty parameter value (`- ` / `model: `) — breaks the packer (ParameterValue enum). Single-capture → `default`.
+- ❌ Writing anywhere outside `$TARGET` (the caller-provided destination).
 - ❌ Re-running import over an existing `$TARGET` — refuse, surface the conflict; the user picks a different slug or removes the old dir intentionally.
-- ❌ Pushing with `# TODO` comments still in the manifest.
-- ❌ `QA_AUDIT_SKIP=1` to silence a real `qa_audit` failure — never. That env var exists only for when the audit tool itself is broken, not to dodge a finding (OpenRig-plugins LAW).
-- ❌ Asking "does it sound better now?" — sonic verification is `qa_audit` thresholds; ear-validation is a methodology defect.
-- ❌ Importing more than one tone per PR.
+- ❌ Presenting the draft as done while `# TODO:` comments still remain in the manifest — the caller resolves them before the gate.
+- ❌ Asking "does it sound better now?" — ear-validation is a methodology defect; the OpenRig-plugins gate (run by the caller) is the acceptance signal.
+- ❌ Bundling more than one tone per draft — one tone per import.
 - ❌ Downloading every `models` row for a NAM tone when several share the same `(name, position, size)` and differ only by `architecture_version` — that ships a stale capture next to the current one. Keep only the highest `architecture_version` per group (step 4); IRs are exempt.
-- ❌ Portuguese (or any non-English) in the generated manifest, in the commit message, or in the issue/PR body. Only the live chat stays in the user's language.
+- ❌ Portuguese (or any non-English) in the generated manifest. Only the live chat stays in the user's language.
 - ❌ Inventing a tone id "based on what's similar" when search returns no exact match — surface "no match", let the user choose.
 
 ## Related

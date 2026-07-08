@@ -2,11 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a new skill `openrig-plugin-author` that scaffolds an OpenRig plugin folder + `manifest.yaml` from local NAM or IR input files, following the dev-flow used by previous skills in this repo (issue → worktree → PR).
+**Goal:** Ship a new skill `openrig-plugin-author` that scaffolds an OpenRig plugin folder + `manifest.yaml` from local NAM or IR input files, following the dev-flow used by previous skills in this repo (issue → isolated clone → PR).
+
+> **Superseded note (issue #15):** `git worktree add` is FORBIDDEN in this
+> repo — worktrees share the parent `.git` and break isolation. Where this
+> plan's steps use a worktree, use an **independent clone** instead
+> (`git clone . .solvers/issue-N`). The rule now lives in the
+> `openrig-code-quality` skill (OpenRig-plugins).
 
 **Architecture:** The deliverable is a single Markdown file: `skills/openrig-plugin-author/SKILL.md`. It instructs Claude how to validate inputs, derive a slug, copy files into the correct subdir, run the parameter-axis inference dictionary, and write the per-kind `manifest.yaml`. No executable code. Git/issue/PR concerns are out of scope for the skill itself — the user (or a future caller skill) owns them.
 
-**Tech Stack:** Markdown (SKILL.md), GitHub CLI (`gh`) for issue/PR, Git worktrees for isolation, the user's OpenRig-plugins checkout at `~/Projetos/github.com/jpfaria/OpenRig-plugins` as the smoke-validation target.
+**Tech Stack:** Markdown (SKILL.md), GitHub CLI (`gh`) for issue/PR, an independent clone for isolation (NOT `git worktree`), the user's OpenRig-plugins checkout at `~/Projetos/github.com/jpfaria/OpenRig-plugins` as the smoke-validation target.
 
 **Spec:** `docs/superpowers/specs/2026-05-25-openrig-plugin-author-design.md`
 
@@ -28,7 +34,7 @@ No other files. No code, no tests on disk — verification is smoke-driven in Ta
 
 ---
 
-## Task 1: Open issue + isolated worktree
+## Task 1: Open issue + isolated clone
 
 **Files:**
 - None modified locally yet (issue lives on GitHub).
@@ -69,20 +75,18 @@ gh issue comment "$ISSUE" --body "Worktree: .solvers/issue-$ISSUE on feature/iss
 
 Expected: comment URL printed.
 
-- [ ] **Step 1.3: Create an isolated worktree using the using-git-worktrees skill**
+- [ ] **Step 1.3: Create an isolated clone (NOT a worktree)**
 
-Invoke `superpowers:using-git-worktrees` to create:
-- Worktree path: `.solvers/issue-$ISSUE`
-- Branch: `feature/issue-$ISSUE`
-- Base: `main`
-
-Falling back to native git if the skill is not available:
+`git worktree` is FORBIDDEN — worktrees share the parent `.git` and break
+isolation. Create an independent clone instead:
 ```bash
-git worktree add ".solvers/issue-$ISSUE" -b "feature/issue-$ISSUE" main
+mkdir -p .solvers
+git clone . ".solvers/issue-$ISSUE"
 cd ".solvers/issue-$ISSUE"
+git checkout -b "feature/issue-$ISSUE"
 ```
 
-Expected: worktree directory exists; `git status` inside it reports `On branch feature/issue-$ISSUE`. All remaining steps run **inside that worktree**.
+Expected: the clone directory exists; `git status` inside it reports `On branch feature/issue-$ISSUE`. All remaining steps run **inside that clone**. Cleanup is `rm -rf .solvers/issue-$ISSUE`.
 
 ---
 
@@ -93,7 +97,7 @@ Expected: worktree directory exists; `git status` inside it reports `On branch f
 
 - [ ] **Step 2.1: Create the skill directory**
 
-Run (from inside the worktree):
+Run (from inside the clone):
 ```bash
 mkdir -p skills/openrig-plugin-author
 ```
@@ -333,7 +337,7 @@ failure class. No partial output left on disk.
 ## Anti-patterns
 
 - ❌ Writing into the user's main OpenRig-plugins checkout when they
-  asked for a worktree path. Use exactly the `dest` they passed.
+  passed a destination path. Use exactly the `dest` they passed.
 - ❌ Overwriting an existing destination dir.
 - ❌ Computing or estimating `output_gain_db`. Always `0.0000000`.
 - ❌ Inferring `type` — the user owns that decision.
@@ -696,6 +700,6 @@ No spec section is uncovered.
 - Skill name `openrig-plugin-author` used uniformly across header, file paths, issue title, commit message, PR title.
 - Manifest field names match what the spec dictates (`manifest_version`, `id`, `display_name`, `brand`, `type`, `backend`, `sources`, `parameters`, `captures`, `output_gain_db`).
 - Allowed `type` enum is identical in skill body, error message, and spec.
-- Issue number variable is `$ISSUE` throughout; branch is `feature/issue-$ISSUE`; worktree is `.solvers/issue-$ISSUE` throughout.
+- Issue number variable is `$ISSUE` throughout; branch is `feature/issue-$ISSUE`; the isolated clone is `.solvers/issue-$ISSUE` throughout.
 
 No drift to fix.
