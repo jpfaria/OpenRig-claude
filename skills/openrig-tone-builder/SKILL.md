@@ -42,6 +42,45 @@ back. You do ONLY this:
   low self-floor, the proximity caps there, and "at the floor" is the honest
   ceiling — **report that plainly** (e.g. "the stem's own ceiling is 89%; the
   preset is at it — a longer/cleaner guitar stem is what would move the number").
+- **Adding a block no source names** — see the next section. This is the one that
+  scaled: a single "sensible" placeholder repeated across a batch put an invented
+  reverb on 38 presets at once.
+
+## ⛔ NEVER INVENT A BLOCK — a block needs a NAMED unit or it does not ship
+
+**A block enters the chain only when a source NAMES the unit.** Not "the genre usually
+has one". Not "it would sound empty without it". Not "a room mic was mentioned". A
+cited UNIT — an Echoplex, a Roland Dimension D, an EHX Small Clone, a Korg SDD-3000 —
+or the block does not exist.
+
+**The one exception is the noise gate**, which ships on every `nam_*` / `ir_*` chain
+because a capture carries the captured amp's own noise floor (THE FORM step 2).
+
+**Two specific inventions, both observed in a real 26-song batch:**
+
+1. **"Room ambience" reverb.** A generic room reverb added to stand in for "the room the
+   cab was mic'd in" went onto 38 presets. It is wrong twice over: no source names a
+   reverb unit, **and the NAM capture ALREADY contains the room it was captured in** —
+   the capture was made through a mic'd cab in a real room, so a reverb block on top
+   double-counts it. Never add a reverb to represent a room, a studio, a live take, or
+   "air". If the record's ambience is audible and uncited, that is a research gap you
+   report, not a block you add.
+2. **A block inferred from the amp.** "A Twin Reverb's onboard reverb is a spring tank,
+   so I'll add a spring block" is an INFERENCE, not a citation — no source wrote
+   "spring". If the amp's own reverb matters, say so in the notes and let the user ask
+   for it; do not silently synthesise the amp's front panel as an FX block.
+
+**When a source DOES name a unit but you cannot find its knob values, the block still
+ships** — with `provenance: unverified` and the citation attached (Rule B). Missing
+knobs never justify dropping a cited block, and a missing citation never justifies
+adding an uncited one.
+
+**Prefer LV2 plugin effects over the native blocks** when both can serve the researched
+unit — the native reverbs in particular are the weakest option in the catalog. LV2
+manifests declare their ports under `symbol:`, which the offline validate gate does not
+read, so passing params to an LV2 block HARD-FAILS the gate ("not valid for … (allowed:
+(none))"). Ship the LV2 block with **no params** (its defaults) rather than downgrading
+to a native model to get knobs you were going to guess anyway.
 
 ## ⛔ THE FORM — research → `--research` → relay → persist
 
@@ -74,14 +113,18 @@ carries the tone — and skip the proximity / refine / `within` steps.**
      often a CRANKED / MODDED amp (Green Day's Dookie-Mod Plexi) while our captures
      are STOCK. Name the amp's mod/cranked character so the tool regulates the pinned
      capture's **gain-axis**, and/or research a **drive pedal** (players stack 2–3).
-   - **Time/feel:** comp/mod/delay/reverb the research lists ARE the tone even though
-     they barely move the LTAS number (heard, not measured). Put each in `fx[]`; the
-     engine keeps every FIXED block verbatim and never tells you one is missing. A
-     finished rig with **zero reverb AND zero delay is a RED FLAG** — re-research the
-     ambience or cite a source that the part is genuinely dry.
-   - **Noise:** a high-gain NAM capture is noisy — add an **enabled** `dynamics` gate
-     when research cites one OR the capture's measured noise floor is high (threshold
-     `provenance: unverified` if undocumented); don't blanket-gate a clean part.
+   - **Time/feel:** comp/mod/delay/reverb **the research NAMES as a specific unit** ARE
+     the tone even though they barely move the LTAS number (heard, not measured). Put
+     each in `fx[]`; the engine keeps every FIXED block verbatim and never tells you one
+     is missing. "The research names it" means a source names the UNIT — an Echoplex, a
+     Dimension D, a Small Clone, an SDD-3000. A part with no cited time/feel unit ships
+     with **no time/feel block**, and that is a correct result, not a gap. **A dry chain
+     is never a red flag; an uncited block is.** (See "Never invent a block".)
+   - **Noise:** a NAM capture carries the noise floor of the amp it was captured from —
+     **clean captures hiss too**. Every chain whose core is a `nam_*` / `ir_*` capture
+     gets an **enabled** `gate_basic`, not just the high-gain ones. Threshold is a
+     percent (`-96 + p/100*96` dB); 38 % = −60 dB is the clean default, ~42 % for
+     high gain. This is the ONE block that ships without a citation.
 3. **Rule A — research the gear by NAME; the tool PINS it; the number REGULATES,
    never PICKS the amp.** In the research JSON you name each core element — amp (+
    brand + any artist `signature`), drive(s), cab (only if the amp is a preamp).
@@ -108,17 +151,25 @@ carries the tone — and skip the proximity / refine / `within` steps.**
    artist's amp to chase 1–2% of
    a noisy number. **If `resolve_gear` can't back a name, it ABORTS as `unresolved`
    — you fix the RESEARCH name, never feed it an id.**
-4. **Rule B — every FX param is sourced, derivable, or `unverified`.** In the
-   research JSON's `fx[].params`+`provenance`, follow the source: **documented** (rig
-   rundown / interview) → use the values, `provenance: sourced`; **derivable** (delay
-   time = tempo math from the song BPM) → compute, `provenance: derived`; **not
-   documented** (a compressor's exact knobs) → a sensible default, `provenance:
-   unverified`. An absent marker defaults to `unverified`. The report surfaces every
-   FX block under `param_provenance.blocks` plus an explicit
-   `param_provenance.unverified` list — you **relay that list** (Step 5), never
-   presenting a default as sourced. Params the proximity number cannot validate
-   (comp/mod/delay/reverb feel) are set from source/default and **never** optimized
-   by the number.
+4. **Rule B — a BLOCK needs a source; only its PARAMS may be defaulted.** These are two
+   different decisions and conflating them is how invented blocks ship:
+   - **Does this block exist in the chain?** Only if a source NAMES the unit (or it is
+     the noise gate). No source → the block does not go in. `provenance: unverified` is
+     **not** a licence to add a block; it only ever describes the KNOBS of a block whose
+     existence is already cited.
+   - **What are its knob values?** **documented** (rig rundown / interview) → use them,
+     `provenance: sourced`; **derivable** (delay time = tempo math from the song BPM) →
+     compute, `provenance: derived`; **cited unit, undocumented knobs** (a compressor's
+     exact settings) → a sensible default, `provenance: unverified`.
+
+   `sourced` covers **only what the source actually states**. If the source says "the
+   amp's reverb was set medium-heavy", the PRESENCE is sourced and the knobs are not —
+   that block is `unverified` with the citation kept on it. An absent marker defaults to
+   `unverified`. The report surfaces every FX block under `param_provenance.blocks` plus
+   an explicit `param_provenance.unverified` list — you **relay that list** (Step 5),
+   never presenting a default as sourced. Params the proximity number cannot validate
+   (comp/mod/delay/reverb feel) are set from source/default and **never** optimized by
+   the number.
 5. **"Regulate" is MULTI-BLOCK, not the EQ alone.** Regulating toward the reference
    moves the **timbre-affecting** controls together: the **pinned amp's gain-axis**,
    the **drive** (selection/gain-axis), AND the **EQ trim**. A run where only the EQ
@@ -778,16 +829,24 @@ paths.**
   "drives": [ { "name": "Ibanez TS808", "brand": "ibanez", "sources": ["<url>"] } ],
   "cab": null,
   "fx": [
-    { "type": "dynamics", "name": "noise gate", "params": { "threshold_db": -60 },
+    { "type": "dynamics", "name": "noise gate (NAM capture noise floor)",
+      "params": { "threshold": 38, "attack_ms": 0.5, "release_ms": 120,
+                  "hold_ms": 40, "hysteresis_db": 4 },
       "provenance": "unverified", "sources": [] },
     { "type": "delay", "name": "analog delay",
       "params": { "time_ms": 343, "feedback": 28, "mix": 30 },
-      "provenance": "derived", "sources": ["<bpm-source>"] },
-    { "type": "reverb", "name": "spring", "params": { "mix": 14 },
-      "provenance": "unverified", "sources": [] }
+      "provenance": "derived", "sources": ["<bpm-source>"] }
   ]
 }
 ```
+
+Note what is NOT in that `fx[]`: no reverb. No source for this song names a reverb unit,
+so no reverb block ships — and the gate is the one uncited block, because the core is a
+NAM capture. **Native block params are PERCENTS, not physical units** — the gate takes
+`threshold` (0–100 → −96…0 dB), never `threshold_db`; a compressor takes `threshold`
+(→ −60…0 dB), `ratio` (→ 1…20) and `makeup_gain` (→ −24…+24 dB, so 50 = 0 dB). A
+wrong param NAME is silently ignored by the block, so the setting you "made" never
+happens.
 
 - **`amp`** — `name` + `brand` + optional `signature` (artist/song capture) + `sources`.
   Note a mod/cranked character in the `name` (e.g. "Marshall 1959SLP Dookie-Mod") so the
@@ -802,8 +861,10 @@ paths.**
   `sources`. The engine keeps each verbatim. **Never put a `limiter` or `volume` here —
   the gate rejects them.** The EQ TUNE slot is inserted by the engine; you never author it.
 
-Before running, re-walk the research **element by element** and confirm each is in the
-JSON. A finished JSON with no reverb AND no delay is a red flag (Step 2 of THE FORM).
+Before running, re-walk the research **element by element** and confirm two things in
+both directions: every unit a source NAMES is in the JSON, and every block in the JSON
+points at a source that names it (the noise gate excepted). A finished JSON with no
+reverb and no delay is fine; a finished JSON with a block you cannot cite is not.
 
 ### 4. Run `build_preset.py --research`
 
@@ -1001,6 +1062,14 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
       hand-typed model id or param path anywhere. The COMPLETE researched rig is in it:
       every drive/comp/gate/mod/delay/reverb the research showed, the amp (+ artist
       `signature` for the catalog grep), `cab` only for a preamp.
+- [ ] **Every block in the JSON points at a source that NAMES the unit** — no reverb for
+      "the room" (the capture already has it), no block inferred from the amp's front
+      panel, no genre-shaped placeholder. The ONLY uncited block is the `gate_basic` that
+      every `nam_*`/`ir_*` chain carries. A dry chain is a correct result.
+- [ ] Native block params use the block's own units (percent, not dB) — a wrong param
+      NAME is silently ignored, so the setting never happens. Where an LV2 plugin covers
+      the researched unit you used it, with NO params (its ports are not offline-validated
+      and passing params hard-fails the gate).
 - [ ] You ran **`build_preset.py --research`** (with `--plugins-root`) — not a hand-built
       `add_block` loop, not a manual eq_match loop. It did NOT abort on `unresolved`
       (every researched name was backed by the catalog, or a genuinely-missing capture
@@ -1066,10 +1135,16 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   regulagens" (every block has adjustments). Regulating is multi-block: the amp gain-axis
   + the drive + the EQ together, and every feel block (comp/gate/delay/reverb/mod) carries
   researched params (Rule B), never the engine/plugin default.
-- **Shipping a chain with ZERO reverb AND ZERO delay** without a cited source confirming
-  the part is dry — almost always a research miss. Re-research the ambience or cite the
-  dryness. **And leaving a noisy high-gain capture UNGATED** — add + enable a `dynamics`
-  gate when research or the measured noise floor calls for it.
+- **Adding a reverb/delay/comp/mod block no source NAMES.** A dry chain is a correct
+  result; an uncited block is not. "Zero reverb and zero delay" is NOT a red flag — the
+  red flag is a block you cannot point at a source for. Never add a reverb to represent
+  a room: the NAM capture already contains the room it was captured in. Never infer a
+  block from the amp's front panel ("a Twin's reverb is a spring tank"). See "Never
+  invent a block".
+- **Leaving a NAM/IR capture UNGATED** — every capture carries the captured amp's noise
+  floor, clean ones included. An enabled `gate_basic` is the ONE uncited block that ships.
+- **Reaching for a native reverb when an LV2 plugin covers the researched unit** — the
+  native reverbs are the weakest option; pass the LV2 block with no params instead.
 - **Presenting a guessed FX knob (comp/mod/delay/reverb) as if researched.** If a param
   isn't documented or derivable, set a default, tag `provenance: unverified`, and surface
   it from the report's `unverified` list (Rule B). The proximity number never sets these.
@@ -1130,8 +1205,13 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | "The stem is a top-dead fragment, so I'll EQ it bright by hand to the right tone" | You author NO EQ. `build_preset` auto-detects the degraded reference (`top_octave_dead` OR rolloff < ~800 Hz) and ships the gear with a **FLAT** EQ (`mode: degraded-reference`); the gear carries the tone. You relay it; the proximity number is NOT the validator (it would chase the artifact) — the user's ear is. One bounded ear move only on their word. |
 | "The number ranked a Fender above the John-Mayer Dumble, so I'll ship the Fender" | The number is too weak to tell amps apart — 67.81% vs 66.10% is a 1.7% noise gap, nothing cleared the floor. When the exact capture exists `resolve_gear` PINS it and the number only regulates the gain-axis; it NEVER picks the amp. A below-floor pinned chain is a wrong-drive / high-floor signal you surface (a degraded reference is auto-caught upstream and shipped flat as `mode: degraded-reference`). |
 | "I'll just regulate the EQ, the other blocks are fine at default" | Regulating is multi-block: the amp gain-axis + the drive + the EQ trim all move, and every feel block carries researched params (Rule B), never the default. A run where only the EQ moved is wrong — "todos os blocos têm regulagens". |
-| "No reverb or delay in my JSON — the record was probably dry" | "Probably dry" is an assumption, not a source. Zero reverb AND zero delay is a red flag: re-research the ambience or cite a source. And a noisy high-gain capture needs an enabled gate. |
-| "I don't have the comp's exact knobs, I'll set values and move on" | Set the default, but tag `provenance: unverified` and surface it from the report's `unverified` list (Rule B). Never present a default as sourced; the number never sets feel params. |
+| "No reverb or delay in my JSON — it'll sound empty, I'll add a small room" | That is the invention. A dry chain is a correct result; "it would sound empty" is your ear, and you have none. No source NAMES a unit → no block. And the NAM capture already contains the room it was captured in, so a room reverb double-counts it. |
+| "The source says the amp's own reverb was medium-heavy, so I'll add a spring block" | The source cites the amp's front panel, not an FX unit, and never wrote "spring" — that is your inference. Put it in the notes and let the user ask. Synthesising the amp's controls as blocks is inventing. |
+| "`provenance: unverified` exists, so an uncited block is allowed as long as I label it" | `unverified` describes the KNOBS of a block whose EXISTENCE is cited. It is not a licence to add the block. Two decisions, never conflated (Rule B). |
+| "Only the presence is documented, but I'll tag the block `sourced` anyway" | `sourced` covers only what the source states. Presence cited + knobs invented = `unverified`, citation kept on the block. Mislabelling makes the audit trail lie, and the owner catches it by ear before the log does. |
+| "It's one small placeholder, it's not worth re-researching" | It never stays one. The same "sensible" placeholder repeated across a batch put an invented reverb on 38 presets in a single run. |
+| "This is a clean part, it doesn't need a gate" | A NAM capture of a clean amp hisses too — the noise floor is baked into the capture. Every `nam_*`/`ir_*` chain gets an enabled `gate_basic`. |
+| "I don't have the comp's exact knobs, I'll set values and move on" | If the UNIT is cited, set the default, tag `provenance: unverified` and surface it from the report's `unverified` list (Rule B). If the unit is NOT cited, there is no block to set knobs on. |
 | "I built it from research, no need to render" | Research = educated guess. `build_preset.py` is mandatory when a reference exists; the only validated preset is one the engine rendered + measured to the floor. Clocks v1 (saved without rendering) was thrown away. |
 | "I'll convert `total_gap_db` to a % / gate on the dB gap / chase `match_score`" | The report emits `proximity_pct` + `self_floor_pct` + `within` directly. Gate on `within`. `match_score` folds in level/onsets/silence and never converges on a real recording. |
 | "It sounds muffled to me, so I'll EQ-brighten / trust the number over the user" | A sonic opinion from YOU is fabrication — you have no ears; act on the measurement. But when the **user** says it's bad, that overrides the number — act on their specific complaint. |
