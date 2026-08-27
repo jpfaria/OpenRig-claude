@@ -995,23 +995,67 @@ Auto-selecting because "only one chain matches" is forbidden, as is a single-lin
 `<chain>`? (y/n)" — render the full menu always.
 
 **If the user picks `(N+1) create new chain`:**
+
+**A chain does NOT carry device endpoints.** It references **per-machine I/O bindings by
+id** (`io_binding_ids`) and the engine discovers its input/output endpoints from them. A
+chain created by the GUI has NO `Input`/`Output` blocks — its `blocks` list starts at the
+first FX. Build one the same way.
+
 1. **Name + instrument prompts** (one ask). Never infer the instrument from the song or
    chain name; re-ask the missing one explicitly.
-2. **Read `openrig://devices`** ONCE, immediately before the menus, and render TWO
-   numbered menus (input, output) using the actual `<label>` + `device_id`. Recommend
-   allowed, but wait for an explicit pick per side; render the menu even with one device.
-3. **Channels + mode prompts** per chosen device (`[1]` mono, `[1,2]` stereo; mode
-   `mono`/`stereo`/`dual_mono`). Suggest a default, never self-apply.
-4. **Build the Chain payload and call `add_chain`:**
-   ```json
-   { "chain": { "enabled": true, "instrument": "<from 1>", "blocks": [
-     { "id": "rig:input",  "kind": { "Input":  { "entries": [{ "device_id": "<…>", "channels": [<…>], "mode": "<…>" }] } } },
-     { "id": "rig:output", "kind": { "Output": { "entries": [{ "device_id": "<…>", "channels": [<…>], "mode": "<…>" }] } } }
-   ] } }
+2. **Read the I/O binding registry and render it as a menu — this is the common case.**
+   The registry is per-machine and lives in `<openrig-user-data-root>/config.yaml` under
+   `io_bindings:` (no MCP resource exposes it yet — read the file; `openrig://project`
+   only shows which ids each chain already uses). Render every binding numbered:
+
+   > "Which I/O binding should the new chain use?
+   > **(1)** `io-1-2a1b` — 'Scarlett 2i2' — in: `In 1` (ch `[0]`, mono) · out: `Out 1` (ch `[0,1]`, stereo)
+   > ...
+   > **(N+1) create a new binding** — I'll ask for device + channels + mode."
+   > *(render in the user's language at runtime)*
+
+   Recommend allowed, but **wait for the explicit pick** — render the menu even with one
+   binding. An existing binding that already covers the wanted in/out is the answer;
+   creating a second binding over the same channels is not.
+3. **Only when no existing binding serves** (the user picked `(N+1)`, or `io_bindings:` is
+   empty): read `openrig://devices` ONCE and render TWO numbered device menus (input,
+   output) using the actual `<label>` + `device_id`; ask channels + mode per side
+   (**zero-based**: `[0]` mono, `[0,1]` stereo; mode `mono`/`stereo`/`dual_mono`). Suggest
+   a default, never self-apply. Then build the binding:
    ```
+   create_io_binding { "binding": { "id": "<slug>", "name": "<label>", "inputs": [], "outputs": [] } }
+   add_io_endpoint  { "binding_id": "<slug>", "device_id": "<in…>",  "channels": [0],    "mode": "mono",   "is_input": true  }
+   add_io_endpoint  { "binding_id": "<slug>", "device_id": "<out…>", "channels": [0,1], "mode": "stereo", "is_input": false }
+   ```
+   Endpoint names are auto-assigned by the handler (`In 1` / `Out 1`).
+4. **Verify the input channel is free BEFORE calling `add_chain` with `enabled: true`.**
+   The engine refuses a second enabled chain on a captured input:
+   ```
+   chain 'chain:<uuid>' cannot be enabled: input '<device>' channel 0 is already captured
+   by the enabled chain 'rig:input-1' — disable that chain or bind this one to a free channel
+   ```
+   From `openrig://project` take every chain with `enabled: true` and its
+   `io_binding_ids`; resolve those bindings' input channels in `config.yaml`. If the
+   chosen binding's input channel collides, **STOP and offer the three legitimate exits**:
+   **(a)** create the chain **disabled** (`enabled: false`) and enable it later, **(b)**
+   bind to a free channel (pick/create another binding), **(c)** disable the occupying
+   chain. The user picks — never decide for them.
+5. **Build the Chain payload and call `add_chain` — with NO I/O blocks:**
+   ```json
+   { "chain": {
+       "enabled": true,
+       "instrument": "<from 1>",
+       "description": "<chain name from 1>",
+       "io_binding_ids": ["<binding id picked in 2/3>"],
+       "blocks": []
+   } }
+   ```
+   `blocks` holds FX only. Never emit `{ "Input": … }` / `{ "Output": … }` entries: the
+   routing already comes from `io_binding_ids`, and those blocks make the chain look
+   unlike every GUI-made chain in the same rig.
    If `add_chain` errors, **STOP and surface the exact error** — do not retry with
-   mutated values or fall back to a different device.
-5. **Continue the import into the new chain id.**
+   mutated values or fall back to a different device or binding.
+6. **Continue the import into the new chain id.**
 
 **Zero chains:** go straight to create-new (still asking name + instrument + I/O) but say
 "your rig has no chains yet — I'll create one". **Exactly one chain:** still render the
@@ -1103,7 +1147,8 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 - [ ] **Persist (file path):** the emitted preset YAML was copied to the presets dir and
       snapshotted to `presets/<role>-final.yaml` on accept. **Persist (MCP path):** you
       checked for a pre-existing preset, ran the Step 3.1 menu (no auto-pick; `add_chain`
-      only with all four prompt blocks answered + `openrig://devices` read), added a NEW
+      only after name + instrument + an explicit I/O-binding pick and a free-input-channel
+      check, with `io_binding_ids` set and NO I/O blocks in the payload), added a NEW
       slot via `apply_rig_nav Preset(-1)`, loaded the emitted preset, set the name via
       `rename_rig_preset`, committed via `save_chain_preset`, and did NOT call
       `save_project`.
@@ -1182,8 +1227,13 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 - **Claiming a playing technique** (palm-mute, sweep, tapping, chugging) or **using
   song/artist/era/genre knowledge as evidence about THIS WAV.** The fingerprint doesn't
   measure technique; cultural priors feed research (Step 1), never claims about the audio.
-- **Calling `add_chain` without `openrig://devices` + both I/O menus + explicit
-  device/channels/mode picks**, or **auto-picking a chain** in Step 3.1.
+- **Calling `add_chain` without the I/O binding menu + an explicit pick**, or
+  **auto-picking a chain** in Step 3.1.
+- **Putting `Input`/`Output` blocks (or a `device_id`/`channels`/`mode`/`entries` payload)
+  in an `add_chain` call.** A chain routes through `io_binding_ids`; I/O blocks are not
+  how a chain is built and no GUI-made chain has them.
+- **Calling `add_chain` with `enabled: true` without checking that the binding's input
+  channel is free** among the already-enabled chains.
 - **`rm -rf`-ing an existing `<song-slug>/`**, **leaving renders/reports in `/tmp/`**,
   **symlinking** the ref instead of `cp`, or **hardcoding `~/.openrig/`** / any per-OS path
   inline (resolve once in Step 0a).
