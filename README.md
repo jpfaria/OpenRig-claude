@@ -21,7 +21,6 @@ It bundles **five skills** that span the full OpenRig lifecycle — from idea to
 | Skill | What it does | Say something like |
 |-------|--------------|--------------------|
 | **openrig-tone-builder** | Researches the original signal chain of a song or artist, maps it to OpenRig blocks, and saves it as a **new named preset** (never overwrites). Commits to the live rig via MCP, or writes a YAML preset — it asks you which, once. | *"timbre da Duality"*, *"recreate the Slipknot tone"*, *"build a preset for [song]"* |
-| **openrig-tone-analyzer** | Pure analysis function: WAV in → JSON fingerprint + spectrogram PNGs out. Handles short renders and multi-minute tracks (per-section fingerprints). Never touches the rig — it's what tone-builder uses to *verify* a tone matches the reference. | *"analyze this track"*, *"compare what came out with the reference"*, *"fingerprint this take"* |
 
 ### 📦 Grow your gear library
 
@@ -41,7 +40,7 @@ It bundles **five skills** that span the full OpenRig lifecycle — from idea to
 ```
 tone-builder ──researches──▶ chain ──builds via MCP──▶ live rig
      │                                                    │
-     └──── tone-analyzer (verify render vs. reference) ◀──┘
+     └──── tone-analyzer plugin (verify render) ◀─────────┘
 
 plugin-author  ┐
                ├──▶ OpenRig plugins (the .nam / .wav gear library tones draw from)
@@ -72,7 +71,7 @@ The plugin's `.mcp.json` wires two MCP servers automatically — no manual confi
 
 - **OpenRig** running with `--mcp` (for everything that touches the live rig).
 - **Node.js** (`npx`) — for the Playwright browser used during tone research.
-- **Python 3.12+** — `openrig-tone-analyzer` self-bootstraps a virtualenv on first use (numpy, librosa, soundfile, matplotlib). No global installs.
+- **tone-analyzer plugin** — `/plugin marketplace add jpfaria/tone-analyzer` then `/plugin install tone-analyzer@tone-analyzer`. Python 3.11+; it self-bootstraps a virtualenv on first use. The tone-builder's offline engine installs the same package via `skills/openrig-tone-builder/bootstrap.sh`.
 
 ### Claude Desktop
 

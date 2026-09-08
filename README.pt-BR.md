@@ -21,7 +21,6 @@ Ele traz **cinco skills** que cobrem o ciclo completo do OpenRig — da ideia ao
 | Skill | O que faz | Diga algo como |
 |-------|-----------|----------------|
 | **openrig-tone-builder** | Pesquisa a cadeia de sinal original de uma música ou artista, mapeia para blocos do OpenRig e salva como um **novo preset nomeado** (nunca sobrescreve). Commita na rig viva via MCP, ou escreve um preset YAML — ele pergunta qual, uma vez. | *"timbre da Duality"*, *"recria o tom do Slipknot"*, *"monta um preset pra [música]"* |
-| **openrig-tone-analyzer** | Função de análise pura: WAV entra → fingerprint JSON + PNGs de espectrograma saem. Lida com renders curtos e faixas de vários minutos (fingerprints por seção). Nunca toca na rig — é o que o tone-builder usa para *verificar* se um timbre bate com a referência. | *"analisa esse áudio"*, *"compara o som que saiu com a referência"*, *"fingerprint do som"* |
 
 ### 📦 Crescer a biblioteca de gear
 
@@ -41,7 +40,7 @@ Ele traz **cinco skills** que cobrem o ciclo completo do OpenRig — da ideia ao
 ```
 tone-builder ──pesquisa──▶ chain ──monta via MCP──▶ rig viva
      │                                                 │
-     └──── tone-analyzer (verifica render vs. ref.) ◀──┘
+     └──── plugin tone-analyzer (verifica render) ◀────┘
 
 plugin-author  ┐
                ├──▶ plugins do OpenRig (a biblioteca .nam / .wav de onde os timbres vêm)
@@ -72,7 +71,7 @@ O `.mcp.json` do plugin fia dois servidores MCP automaticamente — sem configur
 
 - **OpenRig** rodando com `--mcp` (para tudo que toca a rig viva).
 - **Node.js** (`npx`) — para o browser Playwright usado na pesquisa de timbres.
-- **Python 3.12+** — o `openrig-tone-analyzer` faz bootstrap de um virtualenv no primeiro uso (numpy, librosa, soundfile, matplotlib). Sem instalações globais.
+- **Plugin tone-analyzer** — `/plugin marketplace add jpfaria/tone-analyzer` e depois `/plugin install tone-analyzer@tone-analyzer`. Python 3.11+; ele faz bootstrap de um virtualenv no primeiro uso. O motor offline do tone-builder instala o mesmo pacote via `skills/openrig-tone-builder/bootstrap.sh`.
 
 ### Claude Desktop
 

@@ -21,7 +21,6 @@ Trae **cinco skills** que cubren el ciclo completo de OpenRig — de la idea al 
 | Skill | Qué hace | Di algo como |
 |-------|----------|--------------|
 | **openrig-tone-builder** | Investiga la cadena de señal original de una canción o artista, la mapea a bloques de OpenRig y la guarda como un **nuevo preset con nombre** (nunca sobrescribe). Aplica sobre la rig viva vía MCP, o escribe un preset YAML — pregunta cuál, una vez. | *"timbre da Duality"*, *"recrea el tono de Slipknot"*, *"arma un preset para [canción]"* |
-| **openrig-tone-analyzer** | Función de análisis pura: WAV entra → fingerprint JSON + PNGs de espectrograma salen. Maneja renders cortos y pistas de varios minutos (fingerprints por sección). Nunca toca la rig — es lo que el tone-builder usa para *verificar* que un timbre coincide con la referencia. | *"analiza este audio"*, *"compara lo que salió con la referencia"*, *"fingerprint del sonido"* |
 
 ### 📦 Hacer crecer la biblioteca de equipos
 
@@ -41,7 +40,7 @@ Trae **cinco skills** que cubren el ciclo completo de OpenRig — de la idea al 
 ```
 tone-builder ──investiga──▶ cadena ──arma vía MCP──▶ rig viva
      │                                                  │
-     └──── tone-analyzer (verifica render vs. ref.) ◀───┘
+     └──── plugin tone-analyzer (verifica render) ◀─────┘
 
 plugin-author  ┐
                ├──▶ plugins de OpenRig (la biblioteca .nam / .wav de donde salen los timbres)
@@ -72,7 +71,7 @@ El `.mcp.json` del plugin conecta dos servidores MCP automáticamente — sin co
 
 - **OpenRig** corriendo con `--mcp` (para todo lo que toca la rig viva).
 - **Node.js** (`npx`) — para el navegador Playwright usado en la investigación de timbres.
-- **Python 3.12+** — `openrig-tone-analyzer` hace bootstrap de un virtualenv en el primer uso (numpy, librosa, soundfile, matplotlib). Sin instalaciones globales.
+- **Plugin tone-analyzer** — `/plugin marketplace add jpfaria/tone-analyzer` y luego `/plugin install tone-analyzer@tone-analyzer`. Python 3.11+; hace bootstrap de un virtualenv en el primer uso. El motor offline del tone-builder instala el mismo paquete vía `skills/openrig-tone-builder/bootstrap.sh`.
 
 ### Claude Desktop
 

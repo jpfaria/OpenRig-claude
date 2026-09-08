@@ -5,6 +5,21 @@ description: "Use when the user asks for a tone, timbre, or preset for a specifi
 
 # OpenRig Tone Builder
 
+## Prerequisites — the `tone-analyzer` plugin
+
+Reference fingerprinting (Step 0) is the **`tone-analyzer:tone-analyzer`** skill,
+shipped as its own plugin (`jpfaria/tone-analyzer`). Check it is installed before
+starting; if not, tell the user to run:
+
+```
+/plugin marketplace add jpfaria/tone-analyzer
+/plugin install tone-analyzer@tone-analyzer
+```
+
+The offline engine (`build_preset.py`, Step 0b) lives in this skill's `scripts/`
+and installs the same analyzer as a pip dependency via `./bootstrap.sh` (run
+from `skills/openrig-tone-builder/`; idempotent).
+
 ## ⛔ THE PROCESS — feed RESEARCH, never type an id
 
 The whole job: you make the **judgment calls** (research the artist's real rig
@@ -86,7 +101,7 @@ to a native model to get knobs you were going to guess anyway.
 
 Build EXACTLY this way, every tone, the same. The deterministic loop
 (resolve+pin → gate → gear search → EQ trim) lives in
-**`build_preset.py`** (the `openrig-tone-analyzer` engine). Your job is to feed it
+**`build_preset.py`** (this skill's offline engine). Your job is to feed it
 a correct **research JSON** and relay its **report** — never to re-narrate the
 loop by hand, never to type an id it should resolve. **This is the full FORM for when
 there IS a reference WAV and you can render. With NO reference (a generic genre preset),
@@ -539,14 +554,15 @@ Set `Status:` to `done` when the user accepts, `abandoned` if they walk away,
 
 ## Step 0b — Resolve the engine (`build_preset.py` + `openrig-render` + DI) — BEFORE Step 0
 
-The build gate runs **`build_preset.py`** (the `openrig-tone-analyzer` engine),
+The build gate runs **`build_preset.py`** (this skill's offline engine),
 driving the **installed** `openrig-render` — the headless offline renderer OpenRig
 ships next to the GUI (#741), the **same** `engine::offline::render_chain` the live
 rig uses, so an offline render is byte-identical. No live runtime, no MCP. Resolve
 **once, up front**:
 
-**1. `build_preset.py`** — `skills/openrig-tone-analyzer/scripts/build_preset.py`, run
-via its venv (`skills/openrig-tone-analyzer/.venv/bin/python`, after `./bootstrap.sh`).
+**1. `build_preset.py`** — `skills/openrig-tone-builder/scripts/build_preset.py`, run
+via its venv (`skills/openrig-tone-builder/.venv/bin/python`, after `./bootstrap.sh` in
+that directory — it pip-installs `tone_analyzer` from `jpfaria/tone-analyzer`).
 A standalone `resolve_gear.py` CLI also exists, for inspecting the resolved chain from
 a research JSON without rendering.
 
@@ -602,7 +618,7 @@ JSON. (You find this id the same way as any gear — research the cab by name an
 ## Step 0 — Fingerprint the reference audio FIRST (when WAVs are provided)
 
 If the user provided ANY reference WAV, invoke the
-**`openrig:openrig-tone-analyzer` skill on each WAV before research, before gear
+**`tone-analyzer:tone-analyzer` skill on each WAV before research, before gear
 mapping, before any MCP call**. The fingerprint is a **primary input for tonal SHAPE**
 (where the energy sits) — it shapes the EQ direction; research fills in what the signal
 cannot reveal (amp model/era, brand of pedal, delay/reverb). Going straight to research
@@ -613,8 +629,10 @@ caveat below.
 0. **Guitar-only check.** The reference must be the **isolated guitar**. If the user
    sends a full mix, isolate the guitar first (source separation — e.g. `demucs`); if
    you cannot, STOP and ask for an isolated stem rather than validating against a mix.
-1. For each reference WAV, invoke `openrig:openrig-tone-analyzer` with the file path. It
-   writes a JSON fingerprint + spectrogram PNGs and returns the paths.
+1. For each reference WAV, invoke `tone-analyzer:tone-analyzer` with the file path
+   (it runs `tone-analyzer analyze <wav> --out-dir …` — pass
+   `<evaluations_path>/<song-slug>/…` from Step 0a as the out-dir; the analyzer never
+   reads MCP itself). It writes a JSON fingerprint + spectrogram PNGs and returns the paths.
 2. **Read every fingerprint JSON before opening any research URL.** It tells you: EQ
    **shape** to lean toward (centroid + band_energy → direction, cross-checked against
    the spectrogram + LTAS, never a hard target); gain stage (gain_character →
@@ -869,7 +887,7 @@ reverb and no delay is fine; a finished JSON with a block you cannot cite is not
 ### 4. Run `build_preset.py --research`
 
 ```bash
-skills/openrig-tone-analyzer/.venv/bin/python skills/openrig-tone-analyzer/scripts/build_preset.py \
+skills/openrig-tone-builder/.venv/bin/python skills/openrig-tone-builder/scripts/build_preset.py \
   --research     <…>/research/<role>-v<N>.json \
   --plugins-root <plugins source root>   # REQUIRED with --research (builds the catalog) \
   --ref          <…>/refs/<role>.wav \
@@ -1080,9 +1098,10 @@ Flow:
    ⚠️ **Scan the render's stdout+stderr for `ignoring unsupported or invalid block` /
    `unsupported nam model`** — exit 0 does NOT prove a complete render. If a marker
    appears, surface it; don't compare a partial render.
-3. **Compare** against the persistent ref: `.venv/bin/python scripts/compare.py
-   <…>/refs/<role>.wav <…>/renders/<role>-vREEVAL-<date>.wav --output
-   <…>/diffs/<role>-vREEVAL-<date>.json`.
+3. **Compare** against the persistent ref with the analyzer CLI (installed in this
+   skill's venv by `bootstrap.sh`): `.venv/bin/tone-analyzer compare
+   <…>/refs/<role>.wav <…>/renders/<role>-vREEVAL-<date>.wav --out-dir
+   <…>/diffs/<role>-vREEVAL-<date>/` (writes `diff.json` there).
 4. **Append a re-eval row** to `eval.md` (do NOT flip `Status:` from `done`). To actually
    tune from the result, that's a fresh build (re-run `build_preset.py`, continuing `<N>`).
 5. **Chat reply**: the new proximity, the diff vs the prior best (from `eval.md`), the
@@ -1238,7 +1257,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   **symlinking** the ref instead of `cp`, or **hardcoding `~/.openrig/`** / any per-OS path
   inline (resolve once in Step 0a).
 - **Opening any reference / planning the layout before invoking
-  `openrig:openrig-tone-analyzer` on every reference WAV.** Step 0 comes first.
+  `tone-analyzer:tone-analyzer` on every reference WAV.** Step 0 comes first.
 
 ## Common rationalizations — forbidden
 
