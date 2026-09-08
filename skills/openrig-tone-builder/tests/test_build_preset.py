@@ -33,7 +33,7 @@ import pytest
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 
-from scripts import _common  # noqa: E402
+from tone_analyzer import _common  # noqa: E402
 from scripts import build_preset as bp  # noqa: E402
 
 

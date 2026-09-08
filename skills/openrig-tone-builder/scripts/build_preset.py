@@ -70,8 +70,8 @@ The render and measurement calls are INJECTED so the loop logic is unit-testable
 without the Rust binary or large WAVs. `main()` wires the real subprocess calls.
 
 PORTABLE BY CONSTRUCTION (skill-rules LAW 1): no machine-tied paths. The
-analyzer scripts and venv resolve relative to this file (`sys.executable`,
-`Path(__file__)`); the render binary, DI, plugins root and cab model id are
+analyzer is the `tone_analyzer` package (pip dependency, see requirements.txt);
+sibling engine modules resolve relative to this file (`Path(__file__)`); the render binary, DI, plugins root and cab model id are
 CLI/env inputs only (they live in the OpenRig app / OpenRig-plugins, whose clone
 location varies per machine).
 """
@@ -96,10 +96,11 @@ sys.path.insert(0, str(_HERE.parent))
 
 import numpy as np  # noqa: E402
 
-from scripts import _common  # noqa: E402
+from tone_analyzer import _common  # noqa: E402
+from tone_analyzer.eq_match import next_band_gains, next_highpass_hz  # noqa: E402
+
 from scripts import lint_chain, resolve_gear, validate_chain  # noqa: E402
 from scripts.catalog import load_catalog  # noqa: E402
-from scripts.eq_match import next_band_gains, next_highpass_hz  # noqa: E402
 
 # numpy scalars (from soundfile/numpy peak math) must serialise cleanly to YAML.
 yaml.SafeDumper.add_representer(np.float64, lambda d, v: d.represent_float(float(v)))
@@ -1139,7 +1140,7 @@ def main(argv=None, *, render_fn=None) -> int:
     fp = ref_fp
     self_floor = float(fp["self_floor_pct"])
     reliable_range = fp["reliable_range_hz"]
-    from scripts.eq_match import normalized_ltas  # noqa: E402
+    from tone_analyzer.eq_match import normalized_ltas  # noqa: E402
 
     ref_8band = normalized_ltas(ref_sig, ref_sr)
     hold_mask = coarse_hold_mask(ref_8band, reliable_range)
