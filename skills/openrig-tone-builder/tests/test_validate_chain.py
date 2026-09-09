@@ -196,3 +196,70 @@ def test_cli_exits_0_on_clean_chain(tmp_path, capsys):
         ]
     )
     assert code == 0
+
+
+# --- NAM built-in noise gate (engine default, not a manifest axis) ------------
+# Every NAM block carries its own `noise_gate.enabled` / `noise_gate.threshold_db`
+# (the OpenRig engine synthesises them on top of the manifest axes). The builder
+# uses THAT gate instead of a separate `gate_basic` block (issue #28), so the
+# offline gate must accept the pair on a NAM block -- and only on a NAM block.
+
+def test_nam_builtin_noise_gate_params_are_clean(catalog):
+    result = validate(
+        _chain(
+            {
+                "type": "amp",
+                "model": "nam_dumble_ods_john_mayer_a2",
+                "params": {"gain": 8, "noise_gate.enabled": True,
+                           "noise_gate.threshold_db": -60.0},
+            }
+        ),
+        catalog,
+    )
+    assert result["ok"] is True, result
+    assert result["errors"] == []
+
+
+def test_nam_noise_gate_enabled_must_be_bool(catalog):
+    result = validate(
+        _chain(
+            {
+                "type": "amp",
+                "model": "nam_dumble_ods_john_mayer_a2",
+                "params": {"noise_gate.enabled": "yes"},
+            }
+        ),
+        catalog,
+    )
+    assert result["ok"] is False
+    assert any("noise_gate.enabled" in e for e in result["errors"])
+
+
+def test_nam_noise_gate_threshold_must_be_number(catalog):
+    result = validate(
+        _chain(
+            {
+                "type": "amp",
+                "model": "nam_dumble_ods_john_mayer_a2",
+                "params": {"noise_gate.threshold_db": "-60"},
+            }
+        ),
+        catalog,
+    )
+    assert result["ok"] is False
+    assert any("noise_gate.threshold_db" in e for e in result["errors"])
+
+
+def test_ir_block_has_no_builtin_noise_gate(catalog):
+    result = validate(
+        _chain(
+            {
+                "type": "cab",
+                "model": "ir_marshall_4x12_v30",
+                "params": {"noise_gate.enabled": True},
+            }
+        ),
+        catalog,
+    )
+    assert result["ok"] is False
+    assert any("noise_gate.enabled" in e for e in result["errors"])

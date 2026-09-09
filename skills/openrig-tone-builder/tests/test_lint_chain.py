@@ -5,7 +5,8 @@ the policy in prose:
 
 * zero-time-fx       (warn)  — a chain with no reverb AND no delay is almost
                                always a research miss.
-* ungated-high-gain-nam (warn) — a NAM amp/gain chain with no noise gate.
+* ungated-high-gain-nam (warn) — a NAM amp/gain chain whose NAM block has its
+  own `noise_gate.enabled` off and no cited gate block either.
 * amp-not-pinned     (block) — a multi-model amp contest when an exact capture
                                for the researched amp already exists.
 * forbidden-block    (block) — a limiter_brickwall / volume block (the engine
@@ -102,6 +103,40 @@ def test_nam_amp_with_gate_no_warn(catalog):
     }
     findings = lint(chain, catalog)
     assert "ungated-high-gain-nam" not in codes(findings)
+
+
+def test_nam_amp_with_own_noise_gate_enabled_no_warn(catalog):
+    # The gate is the NAM block's OWN noise_gate.* params (issue #28) -- no
+    # separate gate_basic block needed.
+    chain = {
+        "blocks": [
+            amp_block(model="nam_dumble_a2", params={"noise_gate.enabled": True,
+                                                     "noise_gate.threshold_db": -60}),
+            reverb_block(),
+            delay_block(),
+        ]
+    }
+    findings = lint(chain, catalog)
+    assert "ungated-high-gain-nam" not in codes(findings)
+
+
+def test_nam_amp_with_own_noise_gate_disabled_warns(catalog):
+    chain = {
+        "blocks": [
+            amp_block(model="nam_dumble_a2", params={"noise_gate.enabled": False}),
+            reverb_block(),
+            delay_block(),
+        ]
+    }
+    findings = lint(chain, catalog)
+    assert "ungated-high-gain-nam" in codes(findings)
+
+
+def test_ungated_warn_points_at_the_nam_blocks_own_gate(catalog):
+    chain = {"blocks": [amp_block(model="nam_dumble_a2"), reverb_block(), delay_block()]}
+    msg = by_code(lint(chain, catalog), "ungated-high-gain-nam")[0]["message"]
+    assert "noise_gate.enabled" in msg
+    assert "gate_basic" not in msg or "never" in msg
 
 
 def test_non_nam_amp_no_ungated_warn(catalog):

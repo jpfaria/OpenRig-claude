@@ -6,7 +6,10 @@ Given a chain dict (the `blocks:` list build_preset emits) and a `Catalog`
 * an unknown `model` id -> ERROR (an invented id can never reach the render);
 * a PLUGIN block (`catalog.params(model)` is a dict — NAM/IR, with manifest
   axes) whose `params` carry an undeclared param NAME or an off-axis VALUE
-  -> ERROR. This is the `air=26`-on-a-plugin / wrong-amp-class bug.
+  -> ERROR. This is the `air=26`-on-a-plugin / wrong-amp-class bug. The one
+  addition on a `backend: nam` block is the engine's own noise gate
+  (`noise_gate.enabled` bool / `noise_gate.threshold_db` number), which no
+  manifest declares but every NAM block carries (issue #28).
 * a forbidden block (`limiter_brickwall` model, or a `type: volume` block)
   -> ERROR. The engine strips these; authoring one is a bug.
 
@@ -23,6 +26,7 @@ prints every error and warning, and exits 1 if not ok, 0 if ok.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import sys
 from pathlib import Path
 
@@ -51,6 +55,31 @@ def _values_equal(a: object, b: object) -> bool:
 
 def _in_axis(value: object, allowed: list) -> bool:
     return any(_values_equal(value, a) for a in allowed)
+
+
+# Engine defaults every NAM block carries on top of its manifest axes (the
+# OpenRig `Noise Gate` tab). They never appear in a manifest, so the manifest-axis
+# check alone would reject them. The builder uses THIS gate instead of a separate
+# `gate_basic` block (issue #28). Only the noise-gate pair is offline-validated;
+# the other NAM defaults (`input_db`, `output_db`, `eq.*`) stay unauthored.
+_NAM_BUILTIN_PARAMS: dict[str, "Callable[[object], bool]"] = {
+    "noise_gate.enabled": lambda v: isinstance(v, bool),
+    "noise_gate.threshold_db": lambda v: (
+        isinstance(v, (int, float)) and not isinstance(v, bool)
+    ),
+}
+_BUILTIN_HINT = {
+    "noise_gate.enabled": "a bool",
+    "noise_gate.threshold_db": "a number in dB",
+}
+
+
+def _builtin_params(catalog: Catalog, model: str) -> dict:
+    """The engine-default params a PLUGIN block accepts beyond its manifest axes:
+    the noise-gate pair for a `backend: nam` block, nothing for anything else
+    (an IR has no built-in gate)."""
+    meta = catalog.meta(model) or {}
+    return _NAM_BUILTIN_PARAMS if meta.get("backend") == "nam" else {}
 
 
 def validate(chain: dict, catalog: Catalog) -> dict:
@@ -87,7 +116,15 @@ def validate(chain: dict, catalog: Catalog) -> dict:
             continue
 
         # 3b. PLUGIN block — HARD-validate name + value against the manifest axes.
+        builtin = _builtin_params(catalog, model)
         for name, value in params.items():
+            if name in builtin:
+                if not builtin[name](value):
+                    errors.append(
+                        f"param '{name}'='{value}' not valid for '{model}' "
+                        f"(NAM built-in: {_BUILTIN_HINT[name]})"
+                    )
+                continue
             if name not in schema:
                 allowed = ", ".join(str(k) for k in schema) or "(none)"
                 errors.append(

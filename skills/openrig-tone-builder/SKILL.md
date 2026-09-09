@@ -68,8 +68,10 @@ has one". Not "it would sound empty without it". Not "a room mic was mentioned".
 cited UNIT — an Echoplex, a Roland Dimension D, an EHX Small Clone, a Korg SDD-3000 —
 or the block does not exist.
 
-**The one exception is the noise gate**, which ships on every `nam_*` / `ir_*` chain
-because a capture carries the captured amp's own noise floor (THE FORM step 2).
+**There is no exception — not even the noise gate.** A NAM capture's noise floor is
+handled by the NAM block's **own** gate (`noise_gate.enabled` / `noise_gate.threshold_db`,
+THE FORM step 2), which is a param on a block that already exists, not a new block. The
+builder never adds a `gate_basic`; a gate BLOCK enters only when a source names the pedal.
 
 **Two specific inventions, both observed in a real 26-song batch:**
 
@@ -135,11 +137,16 @@ carries the tone — and skip the proximity / refine / `within` steps.**
      Dimension D, a Small Clone, an SDD-3000. A part with no cited time/feel unit ships
      with **no time/feel block**, and that is a correct result, not a gap. **A dry chain
      is never a red flag; an uncited block is.** (See "Never invent a block".)
-   - **Noise:** a NAM capture carries the noise floor of the amp it was captured from —
-     **clean captures hiss too**. Every chain whose core is a `nam_*` / `ir_*` capture
-     gets an **enabled** `gate_basic`, not just the high-gain ones. Threshold is a
-     percent (`-96 + p/100*96` dB); 38 % = −60 dB is the clean default, ~42 % for
-     high gain. This is the ONE block that ships without a citation.
+   - **Noise:** a NAM capture carries the noise floor of the amp it was captured from.
+     The gate for that is the NAM block's **own** noise gate — the `noise_gate.enabled`
+     / `noise_gate.threshold_db` params every `nam_*` block already has (OpenRig's
+     "Noise Gate" tab). When the capture is noisy, set them on the research JSON's
+     `amp.params` (`noise_gate.enabled: true`, threshold in dB: −60 is a sane clean
+     default, ~−56 for high gain); the resolver carries them onto the block. **Never
+     add a `gate_basic` block for this** — it duplicates a gate the block already has
+     and gives the user two knobs for one job. An `ir_*`-only chain (no NAM block) has
+     no gate unless a source names one. A gate BLOCK ships only when a source names
+     the pedal (an ISP Decimator, a Boss NS-2), like any other block.
 3. **Rule A — research the gear by NAME; the tool PINS it; the number REGULATES,
    never PICKS the amp.** In the research JSON you name each core element — amp (+
    brand + any artist `signature`), drive(s), cab (only if the amp is a preamp).
@@ -168,8 +175,9 @@ carries the tone — and skip the proximity / refine / `within` steps.**
    — you fix the RESEARCH name, never feed it an id.**
 4. **Rule B — a BLOCK needs a source; only its PARAMS may be defaulted.** These are two
    different decisions and conflating them is how invented blocks ship:
-   - **Does this block exist in the chain?** Only if a source NAMES the unit (or it is
-     the noise gate). No source → the block does not go in. `provenance: unverified` is
+   - **Does this block exist in the chain?** Only if a source NAMES the unit. No
+     source → the block does not go in (the capture's noise floor is a PARAM on the
+     NAM block, not a block — see the Noise trap above). `provenance: unverified` is
      **not** a licence to add a block; it only ever describes the KNOBS of a block whose
      existence is already cited.
    - **What are its knob values?** **documented** (rig rundown / interview) → use them,
@@ -792,7 +800,8 @@ ladder when `WebFetch` fails/empties** (common on tonedb.co): Playwright MCP →
 | Element | What you research | Where it goes in the JSON |
 |---|---|---|
 | compressor | named pedal + (if documented) knobs | `fx[]` `type: dynamics` |
-| noise gate | research-cited OR needed for a noisy high-gain capture | `fx[]` `type: dynamics` |
+| noise gate | a research-cited PEDAL only (ISP Decimator, NS-2…) | `fx[]` `type: dynamics` |
+| capture noise floor | is the NAM capture noisy? → the NAM block's own gate, in dB | `amp.params` `noise_gate.enabled` / `noise_gate.threshold_db` (never a block) |
 | drive(s) | every boost/OD/distortion/fuzz, in order; players STACK 2–3 | `drives[]` |
 | amp | model + brand + any artist `signature`; mod/cranked character | `amp` |
 | cab | ONLY if the amp is a preamp (or a documented separate cab) | `cab` (else `null`) |
@@ -843,14 +852,11 @@ paths.**
   "song": "Gravity", "artist": "John Mayer", "role": "rhythm",
   "id": "john_mayer_gravity_rhythm", "name": "John Mayer - Gravity (rhythm)",
   "amp":  { "name": "Dumble Overdrive Special", "brand": "dumble",
-            "signature": "john mayer", "sources": ["<url>"] },
+            "signature": "john mayer", "sources": ["<url>"],
+            "params": { "noise_gate.enabled": true, "noise_gate.threshold_db": -60 } },
   "drives": [ { "name": "Ibanez TS808", "brand": "ibanez", "sources": ["<url>"] } ],
   "cab": null,
   "fx": [
-    { "type": "dynamics", "name": "noise gate (NAM capture noise floor)",
-      "params": { "threshold": 38, "attack_ms": 0.5, "release_ms": 120,
-                  "hold_ms": 40, "hysteresis_db": 4 },
-      "provenance": "unverified", "sources": [] },
     { "type": "delay", "name": "analog delay",
       "params": { "time_ms": 343, "feedback": 28, "mix": 30 },
       "provenance": "derived", "sources": ["<bpm-source>"] }
@@ -858,16 +864,20 @@ paths.**
 }
 ```
 
-Note what is NOT in that `fx[]`: no reverb. No source for this song names a reverb unit,
-so no reverb block ships — and the gate is the one uncited block, because the core is a
-NAM capture. **Native block params are PERCENTS, not physical units** — the gate takes
-`threshold` (0–100 → −96…0 dB), never `threshold_db`; a compressor takes `threshold`
-(→ −60…0 dB), `ratio` (→ 1…20) and `makeup_gain` (→ −24…+24 dB, so 50 = 0 dB). A
-wrong param NAME is silently ignored by the block, so the setting you "made" never
-happens.
+Note what is NOT in that `fx[]`: no reverb, and no gate block. No source for this song
+names a reverb unit, so no reverb block ships; the capture's noise floor is handled by
+the NAM block's own gate, set on `amp.params` (the offline gate validates exactly that
+pair on a `nam_*` block: `noise_gate.enabled` bool, `noise_gate.threshold_db` number in
+dB). **Native block params are PERCENTS, not physical units** — a native compressor takes
+`threshold` (→ −60…0 dB), `ratio` (→ 1…20) and `makeup_gain` (→ −24…+24 dB, so 50 =
+0 dB); a cited native gate pedal (`gate_basic`) takes `threshold` (0–100 → −96…0 dB),
+never `threshold_db`. A wrong param NAME is silently ignored by the block, so the setting
+you "made" never happens.
 
-- **`amp`** — `name` + `brand` + optional `signature` (artist/song capture) + `sources`.
-  Note a mod/cranked character in the `name` (e.g. "Marshall 1959SLP Dookie-Mod") so the
+- **`amp`** — `name` + `brand` + optional `signature` (artist/song capture) + `sources`
+  + optional `params` (the NAM block's own `noise_gate.enabled` / `noise_gate.threshold_db`,
+  when the capture is noisy; the resolver carries them onto the block verbatim). Note a
+  mod/cranked character in the `name` (e.g. "Marshall 1959SLP Dookie-Mod") so the
   tool regulates the pinned capture's gain-axis. Leave `amp` resolving to a `type: body`
   capture for acoustic/clean builds.
 - **`drives[]`** — one entry per pedal, in signal order. Empty `[]` = no drive (clean).
@@ -881,8 +891,8 @@ happens.
 
 Before running, re-walk the research **element by element** and confirm two things in
 both directions: every unit a source NAMES is in the JSON, and every block in the JSON
-points at a source that names it (the noise gate excepted). A finished JSON with no
-reverb and no delay is fine; a finished JSON with a block you cannot cite is not.
+points at a source that names it. A finished JSON with no reverb and no delay is fine;
+a finished JSON with a block you cannot cite is not.
 
 ### 4. Run `build_preset.py --research`
 
@@ -1127,8 +1137,9 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
       `signature` for the catalog grep), `cab` only for a preamp.
 - [ ] **Every block in the JSON points at a source that NAMES the unit** — no reverb for
       "the room" (the capture already has it), no block inferred from the amp's front
-      panel, no genre-shaped placeholder. The ONLY uncited block is the `gate_basic` that
-      every `nam_*`/`ir_*` chain carries. A dry chain is a correct result.
+      panel, no genre-shaped placeholder, no `gate_basic` — a noisy NAM capture is gated
+      by the NAM block's own `noise_gate.*` params on `amp.params`, never by a block.
+      A dry chain is a correct result.
 - [ ] Native block params use the block's own units (percent, not dB) — a wrong param
       NAME is silently ignored, so the setting never happens. Where an LV2 plugin covers
       the researched unit you used it, with NO params (its ports are not offline-validated
@@ -1205,8 +1216,9 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
   a room: the NAM capture already contains the room it was captured in. Never infer a
   block from the amp's front panel ("a Twin's reverb is a spring tank"). See "Never
   invent a block".
-- **Leaving a NAM/IR capture UNGATED** — every capture carries the captured amp's noise
-  floor, clean ones included. An enabled `gate_basic` is the ONE uncited block that ships.
+- **Adding a `gate_basic` block to gate a NAM capture** — the NAM block already has its
+  own noise gate (`noise_gate.enabled` / `noise_gate.threshold_db`). A gate block on top
+  duplicates it. Gate the capture on `amp.params`; a gate BLOCK needs a cited pedal.
 - **Reaching for a native reverb when an LV2 plugin covers the researched unit** — the
   native reverbs are the weakest option; pass the LV2 block with no params instead.
 - **Presenting a guessed FX knob (comp/mod/delay/reverb) as if researched.** If a param
@@ -1279,7 +1291,7 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | "`provenance: unverified` exists, so an uncited block is allowed as long as I label it" | `unverified` describes the KNOBS of a block whose EXISTENCE is cited. It is not a licence to add the block. Two decisions, never conflated (Rule B). |
 | "Only the presence is documented, but I'll tag the block `sourced` anyway" | `sourced` covers only what the source states. Presence cited + knobs invented = `unverified`, citation kept on the block. Mislabelling makes the audit trail lie, and the owner catches it by ear before the log does. |
 | "It's one small placeholder, it's not worth re-researching" | It never stays one. The same "sensible" placeholder repeated across a batch put an invented reverb on 38 presets in a single run. |
-| "This is a clean part, it doesn't need a gate" | A NAM capture of a clean amp hisses too — the noise floor is baked into the capture. Every `nam_*`/`ir_*` chain gets an enabled `gate_basic`. |
+| "The capture hisses, I'll put a `gate_basic` in front of it" | The NAM block already carries a noise gate — `noise_gate.enabled` / `noise_gate.threshold_db` on `amp.params`. A second gate block is a duplicate the user then has to manage twice. The builder never adds `gate_basic`; a gate BLOCK needs a source that names the pedal. |
 | "I don't have the comp's exact knobs, I'll set values and move on" | If the UNIT is cited, set the default, tag `provenance: unverified` and surface it from the report's `unverified` list (Rule B). If the unit is NOT cited, there is no block to set knobs on. |
 | "I built it from research, no need to render" | Research = educated guess. `build_preset.py` is mandatory when a reference exists; the only validated preset is one the engine rendered + measured to the floor. Clocks v1 (saved without rendering) was thrown away. |
 | "I'll convert `total_gap_db` to a % / gate on the dB gap / chase `match_score`" | The report emits `proximity_pct` + `self_floor_pct` + `within` directly. Gate on `within`. `match_score` folds in level/onsets/silence and never converges on a real recording. |

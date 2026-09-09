@@ -371,3 +371,37 @@ def test_cli_unresolvable_amp_exits_nonzero_and_writes_no_chain(tmp_path: Path, 
     err = capsys.readouterr().err.lower()
     assert "amp" in err
     assert "fender" in err
+
+
+# --- amp: `params` (the NAM block's own noise gate) ride through --------------
+# The gate is the NAM block's OWN `noise_gate.*` params (issue #28) -- never a
+# separate `gate_basic` block. The research JSON sets them on `amp.params` and the
+# resolver carries them verbatim onto the amp block.
+
+def test_amp_params_ride_through_to_the_pinned_block(catalog):
+    research = {
+        "id": "gravity", "name": "Gravity",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer", "sources": ["interview"],
+                "params": {"noise_gate.enabled": True,
+                           "noise_gate.threshold_db": -60.0}},
+        "drives": [], "cab": None, "fx": [],
+    }
+    out = resolve(research, catalog)
+    amp = _first(out, "amp")
+    assert amp["model"] == "nam_dumble_ods_john_mayer_a2"
+    assert amp["params"] == {"noise_gate.enabled": True,
+                             "noise_gate.threshold_db": -60.0}
+    # the resolver never injects a gate block on its own
+    assert not any(b.get("type") == "dynamics" for b in _blocks(out))
+
+
+def test_amp_without_params_emits_empty_params(catalog):
+    research = {
+        "id": "gravity", "name": "Gravity",
+        "amp": {"name": "Dumble Overdrive Special", "brand": "dumble",
+                "signature": "john mayer", "sources": ["interview"]},
+        "drives": [], "cab": None, "fx": [],
+    }
+    out = resolve(research, catalog)
+    assert _first(out, "amp")["params"] == {}

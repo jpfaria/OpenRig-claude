@@ -1,7 +1,7 @@
 """Enforce the tone POLICY as code — so the agent can't skip it in prose.
 
 The tone-builder skill encodes several non-negotiable habits (research for the
-time-domain FX, gate a noisy NAM chain, PIN an amp when an exact capture exists,
+time-domain FX, gate a noisy NAM chain through the NAM block's own gate, PIN an amp when an exact capture exists,
 never author a limiter/volume the engine will strip). Stated as prose in a
 SKILL.md they are easy to "forget". Here they are a function over the chain dict
 plus the offline catalog, returning structured findings:
@@ -92,29 +92,36 @@ def _check_zero_time_fx(blocks: list[dict]) -> list[Finding]:
 
 
 def _check_ungated_high_gain_nam(blocks: list[dict]) -> list[Finding]:
-    has_nam_core = any(
-        isinstance(b.get("model"), str)
+    """A NAM core with no gate at all. The gate is the NAM block's OWN
+    `noise_gate.enabled` (an engine default on every NAM block, issue #28); a
+    separate dynamics gate block only counts when research cited the unit."""
+    nam_cores = [
+        b for b in blocks
+        if isinstance(b.get("model"), str)
         and b["model"].startswith("nam_")
         and b.get("type") in {"amp", "gain"}
-        for b in blocks
-    )
-    if not has_nam_core:
+    ]
+    if not nam_cores:
         return []
-    has_gate = any(
+    own_gate = any(
+        (b.get("params") or {}).get("noise_gate.enabled") is True for b in nam_cores
+    )
+    cited_gate_block = any(
         b.get("type") == "dynamics"
         and isinstance(b.get("model"), str)
         and "gate" in b["model"]
         for b in blocks
     )
-    if has_gate:
+    if own_gate or cited_gate_block:
         return []
     return [
         {
             "level": "warn",
             "code": "ungated-high-gain-nam",
             "message": (
-                "a NAM (often noisy) chain has no noise gate — add one if "
-                "research or the measured noise floor calls for it"
+                "a NAM (often noisy) chain has no gate — if the capture is noisy, "
+                "enable the NAM block's own gate (`noise_gate.enabled: true` + "
+                "`noise_gate.threshold_db`); never add a separate gate_basic block"
             ),
         }
     ]

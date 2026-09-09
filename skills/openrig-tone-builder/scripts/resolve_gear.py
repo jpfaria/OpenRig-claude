@@ -12,6 +12,7 @@ slot with no catalog backing goes to `unresolved` (never to a guessed id).
 How each slot resolves (signal order: drives -> amp -> cab -> EQ -> fx):
 
 * **amp** -- search the catalog (`amp` + `preamp`) for `name + brand + signature`.
+  `amp.params` (the NAM block's own `noise_gate.*`) ride onto the block verbatim.
   A signature/exact hit (>=2 distinct query tokens INCLUDING the brand, and a
   clear winner over the runner-up) is PINNED: a single fixed `model:` of the
   matched type -- NOT a `candidates:` list of other amps (no second-guessing the
@@ -125,13 +126,19 @@ def _decide(matches: list, query_tokens: set[str]) -> tuple[str, object]:
 
 # --- block builders ----------------------------------------------------------
 
-def _pinned_block(block_type: str, model_id: str) -> dict:
-    return {"type": block_type, "model": model_id, "enabled": True, "params": {}}
+def _pinned_block(block_type: str, model_id: str, params: dict | None = None) -> dict:
+    return {"type": block_type, "model": model_id, "enabled": True,
+            "params": dict(params or {})}
 
 
-def _candidates_block(block_type: str, matches: list) -> dict:
-    return {"type": block_type, "candidates": [m.model_id for m in matches],
-            "enabled": True}
+def _candidates_block(block_type: str, matches: list,
+                      params: dict | None = None) -> dict:
+    block = {"type": block_type, "candidates": [m.model_id for m in matches],
+             "enabled": True}
+    if params:
+        # build_preset merges block-level params under every candidate.
+        block["params"] = dict(params)
+    return block
 
 
 def _flat_eq_block() -> dict:
@@ -173,12 +180,17 @@ def resolve(research: dict, catalog) -> dict:
             p for p in (amp.get("name"), amp.get("brand"), amp.get("signature")) if p
         )
         decision, payload = _decide(_find_amp(catalog, query), _tokens(query))
+        # `amp.params` are REAL block params the research sets on the capture --
+        # the NAM block's own noise gate (`noise_gate.enabled` /
+        # `noise_gate.threshold_db`, issue #28). They ride through verbatim; the
+        # resolver never injects a separate gate block.
+        amp_params = dict(amp.get("params") or {})
         if decision == "pin":
             block_type = (catalog.meta(payload.model_id) or {}).get("type") or "amp"
-            blocks.append(_pinned_block(block_type, payload.model_id))
+            blocks.append(_pinned_block(block_type, payload.model_id, amp_params))
         elif decision == "candidates":
             block_type = (catalog.meta(payload[0].model_id) or {}).get("type") or "amp"
-            blocks.append(_candidates_block(block_type, payload))
+            blocks.append(_candidates_block(block_type, payload, amp_params))
         else:
             unresolved.append({"slot": "amp", "query": query,
                                "reason": "no catalog amp/preamp match -- research "
