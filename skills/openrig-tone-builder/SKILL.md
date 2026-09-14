@@ -32,13 +32,13 @@ back. You do ONLY this:
    **isolated instrument being built** (the guitar — or acoustic). A separated
    stem can be the WRONG instrument: a piano-driven song (e.g. Clocks) separated
    badly yields a piano stem; matching a guitar to it is hopeless. If unsure, ask.
-2. **Research the artist's actual rig for THIS song** (Step 1) — every element:
-   comp, gate, drive(s), amp/preamp, cab (if preamp), modulation, delay, reverb,
-   body. **`tonedb.co` is source #1 — hit it FIRST**, then the rest of the ladder.
-   Cite sources. Never assert gear from memory (the gear HARD RULE).
-3. **Write the research JSON** (Step 3) — gear NAMES + brands + sources (Rule A)
-   and FX params + provenance (Rule B). This is your ONLY hand-authored input.
-   You do NOT write a single model id or param path.
+2. **Dispatch the `gear-researcher` subagent** (Step 1). It researches the artist's
+   actual rig for THIS song (`tonedb.co` first, every element, cited) and writes the
+   research JSON: gear NAMES + brands + sources (Rule A), FX params + provenance
+   (Rule B). No model id, no param path. You do not research inline.
+3. **Dispatch the `research-auditor` subagent** (Step 2). It re-fetches every cited URL
+   and returns PASS/FAIL per block. A FAIL goes back to the researcher; you never build
+   past it.
 4. **Run `build_preset.py --research`** (Step 4). One command: it `resolve_gear`s
    the names into catalog ids (PINNING the exact/signature capture), runs the
    validate+lint GATE, searches the gear, trims the EQ, and emits
@@ -46,7 +46,8 @@ back. You do ONLY this:
    guess an id. You relay the report and persist (Step 5–6).
 
 **Forbidden shortcuts — each has burned a real build:**
-- Skipping `tonedb.co`, jumping to a generic web search or to memory.
+- Researching inline in this conversation, or building on a research JSON the
+  `research-auditor` has not PASSed (including a revision it has not re-audited).
 - **Typing a model id or param path yourself** to "save a step". The gate exists
   precisely so you never do this — fix the research name, never hand-author the id.
 - **Asking the user to diagnose by ear** ("what sounds wrong / too dark?"). You
@@ -116,37 +117,20 @@ carries the tone — and skip the proximity / refine / `within` steps.**
    user's ear only enters when THEY volunteer a complaint; never fish for it.
    (`build_preset` re-measures the reference itself; you fingerprint up front to
    read the per-song floor and shape the EQ direction.)
-2. **Research the gear EXHAUSTIVELY** (cited, `tonedb.co` first, THEN multiple
-   sources — interviews, rig rundowns, gear DBs, forums). Discover the artist's
-   FULL signal chain for THIS song — guitar + pickups, and **EVERY element**:
-   compressor, noise gate, boost/OD/distortion/fuzz, wah, modulation, delay,
-   reverb, amp(s), cab(s), mic, studio technique. A shallow "amp + done" search is
-   exactly how pedals get missed and the tone comes out wrong. Never from memory.
-   ⛔ **Reproduce the COMPLETE researched rig — omit NO element.** Dropping ANY —
-   because it "feels minor", "wasn't a stomp box", or "the number didn't ask for it"
-   — is the error that gets the whole batch thrown away. Three traps that make you omit
-   (detailed in Workflow Step 1):
-   - **Gain:** "no stomp box on the record" is NOT "amp-only" — the saturation was
-     often a CRANKED / MODDED amp (Green Day's Dookie-Mod Plexi) while our captures
-     are STOCK. Name the amp's mod/cranked character so the tool regulates the pinned
-     capture's **gain-axis**, and/or research a **drive pedal** (players stack 2–3).
-   - **Time/feel:** comp/mod/delay/reverb **the research NAMES as a specific unit** ARE
-     the tone even though they barely move the LTAS number (heard, not measured). Put
-     each in `fx[]`; the engine keeps every FIXED block verbatim and never tells you one
-     is missing. "The research names it" means a source names the UNIT — an Echoplex, a
-     Dimension D, a Small Clone, an SDD-3000. A part with no cited time/feel unit ships
-     with **no time/feel block**, and that is a correct result, not a gap. **A dry chain
-     is never a red flag; an uncited block is.** (See "Never invent a block".)
-   - **Noise:** a NAM capture carries the noise floor of the amp it was captured from.
-     The gate for that is the NAM block's **own** noise gate — the `noise_gate.enabled`
-     / `noise_gate.threshold_db` params every `nam_*` block already has (OpenRig's
-     "Noise Gate" tab). When the capture is noisy, set them on the research JSON's
-     `amp.params` (`noise_gate.enabled: true`, threshold in dB: −60 is a sane clean
-     default, ~−56 for high gain); the resolver carries them onto the block. **Never
-     add a `gate_basic` block for this** — it duplicates a gate the block already has
-     and gives the user two knobs for one job. An `ir_*`-only chain (no NAM block) has
-     no gate unless a source names one. A gate BLOCK ships only when a source names
-     the pedal (an ISP Decimator, a Boss NS-2), like any other block.
+2. **Research + audit the gear in subagents** (Workflow Steps 1–2). `gear-researcher`
+   finds the FULL signal chain for THIS song (every element, cited, never from memory)
+   and writes the COMPLETE rig — omit NO cited element; `research-auditor` re-checks
+   every block against its source. The three traps the researcher is briefed on are also
+   yours when you read its summary and relay the build — never add, drop or relabel a
+   block yourself:
+   - **Gain:** "no stomp box on the record" is NOT "amp-only" — often a CRANKED / MODDED
+     amp (Green Day's Dookie-Mod Plexi) whose mod goes in the amp `name` so the tool
+     regulates the pinned capture's **gain-axis**, and/or a researched drive.
+   - **Time/feel:** only a comp/mod/delay/reverb a source NAMES as a unit ships. **A dry
+     chain is never a red flag; an uncited block is.** (See "Never invent a block".)
+   - **Noise:** a noisy NAM capture is gated by the NAM block's **own**
+     `noise_gate.enabled` / `noise_gate.threshold_db` on `amp.params` (−60 clean, ~−56
+     high gain) — never a `gate_basic` block. A gate BLOCK needs a cited pedal.
 3. **Rule A — research the gear by NAME; the tool PINS it; the number REGULATES,
    never PICKS the amp.** In the research JSON you name each core element — amp (+
    brand + any artist `signature`), drive(s), cab (only if the amp is a preamp).
@@ -259,9 +243,9 @@ tone by ear.
 > cab carry the tone**; the EQ stays **FLAT** (all band gains 0) and `output_db` stays **0**.
 
 **The reference-less FORM:**
-1. **Research the gear exactly as usual** — cited, `tonedb.co` first, Rule A
-   (`resolve_gear` PINS the catalog ids). Gear choice is **unchanged**; that part works the
-   same with or without a reference. Write the research JSON the same way (Step 3).
+1. **Research + audit the gear exactly as usual** (Workflow Steps 1–2 — `gear-researcher`,
+   then `research-auditor` PASS; Rule A, `resolve_gear` PINS the catalog ids). Gear choice
+   is **unchanged**; that part works the same with or without a reference.
 2. **Run `build_preset.py --research` WITHOUT `--ref`** (reference-less mode). It pins the
    gear, runs the validate + lint GATE, and emits the preset = pinned amp/drive/cab + a
    **FLAT `eq_eight_band_parametric`** (all band gains 0, `output_db` 0) + the FIXED FX.
@@ -771,128 +755,50 @@ If only `<artist>` is given, ask once for the song and role.
 The SAME flow on both paths; only the final **persist** step (Step 6) differs. The
 build is always offline.
 
-### 1. Research the signal chain
+### 1. Research the signal chain — dispatch `gear-researcher`
 
-**The Step 0 fingerprint comes first.** Research fills gaps the analyzer cannot resolve
-(amp model/era, brand of pedal, recording context). If you have not fingerprinted every
-reference WAV, go to Step 0.
+**The Step 0 fingerprint comes first.** Research then runs in a subagent, not in this
+conversation: the web round-trips stay out of your context, and the JSON is checked by
+an agent that did not write it.
 
-Hit sources **in order**, stopping when you have a confident gear list (instrument →
-pedals → amp → cab → mic). Always cite which sources you used.
+Dispatch `claude-plugin:gear-researcher` (Agent tool) with:
+- `artist`, `song`, `role`;
+- `research_path` = `<openrig-evaluations-root>/<song-slug>/research/<role>-v<N>.json`
+  (absolute, resolved in Step 0a);
+- `fingerprint` — the Step 0 gain class / `tone_profile` for that role, when there is one.
 
-| Priority | Source | Why |
-|---|---|---|
-| 1 | `https://www.tonedb.co/` (search by song or artist) | Crowdsourced, song-specific, often explicit signal chain. JS-heavy — if WebFetch returns 404/empty, fall back to Playwright MCP. |
-| 2 | `https://www.groundguitar.com/tone-breakdown/` | Per-song gear listings with chain order. |
-| 3 | `https://killerrig.com/` | Numeric knob settings per song. |
-| 4 | `https://musicstrive.com/<artist>-amp-settings/` | Settings per song / per guitarist. |
-| 5 | `https://www.guitarchalk.com/<player>-amp-settings/` | Player-focused. |
-| 6 | `https://prosoundhq.com/...` | Generic recipes; fallback EQ. |
-| 7 | `https://blog.andertons.co.uk/sound-like/...` | Gear context per era. |
-| 8 | Premier Guitar / Guitar World rig rundowns | Authoritative for era + recording context. |
+Rhythm and lead are independent — dispatch both researchers in one message. Each returns
+the path, a `slot | unit | source | quote` table, `Gaps:` and `Unreachable:`. The research
+procedure (source ladder with `tonedb.co` first, the per-element checklist, the JSON
+schema, native param units) lives in the agent: `agents/gear-researcher.md` in this plugin.
 
-When two sources disagree on knob values, prefer the one that names the song. **Fallback
-ladder when `WebFetch` fails/empties** (common on tonedb.co): Playwright MCP → WebSearch
-→ ask the user to paste page text.
+### 2. Audit the research — dispatch `research-auditor`
 
-**What to research, per element** (the rig the research JSON must cover):
+Dispatch `claude-plugin:research-auditor` with the same `research_path`. It re-fetches
+every cited URL and returns `VERDICT: PASS | FAIL` with a per-block evidence table.
 
-| Element | What you research | Where it goes in the JSON |
-|---|---|---|
-| compressor | named pedal + (if documented) knobs | `fx[]` `type: dynamics` |
-| noise gate | a research-cited PEDAL only (ISP Decimator, NS-2…) | `fx[]` `type: dynamics` |
-| capture noise floor | is the NAM capture noisy? → the NAM block's own gate, in dB | `amp.params` `noise_gate.enabled` / `noise_gate.threshold_db` (never a block) |
-| drive(s) | every boost/OD/distortion/fuzz, in order; players STACK 2–3 | `drives[]` |
-| amp | model + brand + any artist `signature`; mod/cranked character | `amp` |
-| cab | ONLY if the amp is a preamp (or a documented separate cab) | `cab` (else `null`) |
-| modulation | chorus/phaser/tremolo + rate/depth | `fx[]` |
-| delay | time (BPM math if undocumented) + feedback + mix | `fx[]` `type: delay` |
-| reverb | room (rhythm) / hall (lead), mix | `fx[]` `type: reverb` |
-| acoustic body | which guitar (clean/acoustic builds) | `amp` (a `type: body` capture) |
+- **PASS** → Step 4.
+- **FAIL** → re-dispatch `gear-researcher` with the same `research_path` and the auditor's
+  report as `audit_report`, then audit again. The file has not been built yet, so the
+  revision rewrites the same `v<N>`.
+- **Second FAIL on the same block** → stop and show the user the auditor's rows for it
+  (the research gap, with evidence). Do not build around it; do not edit the JSON yourself.
 
-> ⛔ **The drive stage is first-class and STACKS.** An electric tone almost always has
-> at least one drive; players run two or three (clean boost → TS → Big Muff). Research
-> each, in order, into `drives[]`. A cranked/modded amp's gain is covered by the amp's
-> **gain-axis** (note the mod in the amp research), not by defaulting to amp-only. The
-> ONLY electric exception is a genuinely clean part. "The amp crunch is enough" is a
-> rationalization unless research shows the part was truly pedal-free.
+The same loop applies when `build_preset` aborts on `unresolved` (Step 4): send the abort
+to the researcher as `audit_report`, then re-audit before re-running.
 
-Adjust per style: **Clean/acoustic** — drop the drives + gate, clean amp, add an
-acoustic `body`. **Funk/clean rhythm** — keep the compressor, low amp gain.
-**Lead solo** — more delay mix, hall reverb. **Delay-driven (Edge/Mayer rhythm)** —
-delay time = dotted-eighth at the song BPM (`60000/bpm*1.5/2`), feedback ~25–35%, mix
-~30–40% (`provenance: derived`). **Doom/drone** — drop boost, raise reverb mix, tape
-delay.
+> **No Agent tool** (a client without subagents): read `agents/gear-researcher.md` and
+> follow it, then read `agents/research-auditor.md` and run the audit as a separate pass
+> that re-fetches every URL — never a self-check from memory of what you just wrote.
 
-### 2. (No manual id mapping — `resolve_gear` does it)
+### 3. The research JSON — what the subagents hand you
 
-You do **not** look up model ids or grep manifests for them. `resolve_gear` (inside
-`build_preset --research`) greps the offline catalog, **PINS** the exact/signature
-capture, emits `candidates:` stand-ins only where no exact capture exists, and ABORTS
-on anything it can't back (so you fix the research name). Your only job in this step is
-to make the research **names** specific and correct — include the artist + signature so
-the catalog grep finds the signature capture (Rule A, Step 3 of THE FORM). Discovery is
-the tool's; judgment about *what gear the artist used* is yours.
-
-The Step 0 fingerprint is your primary input for the EQ **shape** (the engine TUNES the
-EQ; you never pre-set it) and the gain class. (`time_fx`/`centroid`/`RMS` are fragile —
-do not set delay/reverb from `time_fx`, do not EQ-darken off a raw `centroid`, do not
-target the ref's `RMS`.) Prefer real amp models the research names; let the tool resolve
-them.
-
-### 3. Write the research JSON
-
-Write your cited judgment to
-`<openrig-evaluations-root>/<song-slug>/research/<role>-v<N>.json`. Gear NAMES + brands
-+ sources (Rule A); FX `params` + `provenance` (Rule B). **No model ids, no param
-paths.**
-
-```json
-{
-  "song": "Gravity", "artist": "John Mayer", "role": "rhythm",
-  "id": "john_mayer_gravity_rhythm", "name": "John Mayer - Gravity (rhythm)",
-  "amp":  { "name": "Dumble Overdrive Special", "brand": "dumble",
-            "signature": "john mayer", "sources": ["<url>"],
-            "params": { "noise_gate.enabled": true, "noise_gate.threshold_db": -60 } },
-  "drives": [ { "name": "Ibanez TS808", "brand": "ibanez", "sources": ["<url>"] } ],
-  "cab": null,
-  "fx": [
-    { "type": "delay", "name": "analog delay",
-      "params": { "time_ms": 343, "feedback": 28, "mix": 30 },
-      "provenance": "derived", "sources": ["<bpm-source>"] }
-  ]
-}
-```
-
-Note what is NOT in that `fx[]`: no reverb, and no gate block. No source for this song
-names a reverb unit, so no reverb block ships; the capture's noise floor is handled by
-the NAM block's own gate, set on `amp.params` (the offline gate validates exactly that
-pair on a `nam_*` block: `noise_gate.enabled` bool, `noise_gate.threshold_db` number in
-dB). **Native block params are PERCENTS, not physical units** — a native compressor takes
-`threshold` (→ −60…0 dB), `ratio` (→ 1…20) and `makeup_gain` (→ −24…+24 dB, so 50 =
-0 dB); a cited native gate pedal (`gate_basic`) takes `threshold` (0–100 → −96…0 dB),
-never `threshold_db`. A wrong param NAME is silently ignored by the block, so the setting
-you "made" never happens.
-
-- **`amp`** — `name` + `brand` + optional `signature` (artist/song capture) + `sources`
-  + optional `params` (the NAM block's own `noise_gate.enabled` / `noise_gate.threshold_db`,
-  when the capture is noisy; the resolver carries them onto the block verbatim). Note a
-  mod/cranked character in the `name` (e.g. "Marshall 1959SLP Dookie-Mod") so the
-  tool regulates the pinned capture's gain-axis. Leave `amp` resolving to a `type: body`
-  capture for acoustic/clean builds.
-- **`drives[]`** — one entry per pedal, in signal order. Empty `[]` = no drive (clean).
-- **`cab`** — an object (`{ "name": ... }`) ONLY when the amp is a preamp or a documented
-  separate cab; `null` for a full amp (combo/head+cab). The engine cabs a `preamp` core
-  itself (via `--cab-model`).
-- **`fx[]`** — every comp / gate / mod / delay / reverb, each with `type`, `name`,
-  `params`, `provenance` (`sourced` / `derived` / `unverified`; absent → `unverified`),
-  `sources`. The engine keeps each verbatim. **Never put a `limiter` or `volume` here —
-  the gate rejects them.** The EQ TUNE slot is inserted by the engine; you never author it.
-
-Before running, re-walk the research **element by element** and confirm two things in
-both directions: every unit a source NAMES is in the JSON, and every block in the JSON
-points at a source that names it. A finished JSON with no reverb and no delay is fine;
-a finished JSON with a block you cannot cite is not.
+`<song-slug>/research/<role>-v<N>.json`: `amp` (name + brand + optional `signature`,
+`sources`, optional `params` = the NAM block's own `noise_gate.*`), `drives[]` (signal
+order), `cab` (`null` for a full amp), `fx[]` (`type`, the named unit, `params`,
+`provenance`, `sources`). Gear NAMES only — no model ids, no param paths: `resolve_gear`
+(inside `build_preset --research`) PINS the exact/signature capture and ABORTS on a name
+it can't back. You never edit this file; every change goes researcher → auditor.
 
 ### 4. Run `build_preset.py --research`
 
@@ -1131,19 +1037,11 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
       (`refs/`, `fingerprints/`, `research/`, `renders/`, `reports/`, `presets/`,
       `eval.md`); ref WAVs `cp`'d (NOT symlinked) and sha256-verified; fingerprints
       persisted.
-- [ ] You authored a **research JSON** (gear NAMES + Rule-B FX params/provenance) — NOT a
-      hand-typed model id or param path anywhere. The COMPLETE researched rig is in it:
-      every drive/comp/gate/mod/delay/reverb the research showed, the amp (+ artist
-      `signature` for the catalog grep), `cab` only for a preamp.
-- [ ] **Every block in the JSON points at a source that NAMES the unit** — no reverb for
-      "the room" (the capture already has it), no block inferred from the amp's front
-      panel, no genre-shaped placeholder, no `gate_basic` — a noisy NAM capture is gated
-      by the NAM block's own `noise_gate.*` params on `amp.params`, never by a block.
-      A dry chain is a correct result.
-- [ ] Native block params use the block's own units (percent, not dB) — a wrong param
-      NAME is silently ignored, so the setting never happens. Where an LV2 plugin covers
-      the researched unit you used it, with NO params (its ports are not offline-validated
-      and passing params hard-fails the gate).
+- [ ] The research JSON came from **`gear-researcher`** (gear NAMES + Rule-B FX
+      params/provenance, no model id or param path anywhere), and **`research-auditor`
+      returned `VERDICT: PASS` on the exact file you built** — not on an earlier revision,
+      not a self-check. Every block points at a source that NAMES the unit for this song;
+      a dry chain is a correct result.
 - [ ] You ran **`build_preset.py --research`** (with `--plugins-root`) — not a hand-built
       `add_block` loop, not a manual eq_match loop. It did NOT abort on `unresolved`
       (every researched name was backed by the catalog, or a genuinely-missing capture
@@ -1186,6 +1084,9 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 
 ## Red flags — STOP
 
+- **Researching gear inline, self-verifying the research, or running `build_preset` on a
+  JSON without an auditor PASS** — or hand-editing the JSON after a FAIL instead of sending
+  the report back to `gear-researcher` and re-auditing.
 - **Typing a model id or param path yourself** instead of feeding a gear NAME and letting
   `resolve_gear` back it. The gate exists to block guessed ids — fix the research name,
   never hand-author the id. (The ONE pointer: the gate HARD-fails an unknown id / off-axis
@@ -1299,6 +1200,8 @@ Re-eval does NOT mutate the rig, does NOT call `save_chain_preset`.
 | "The fingerprint says delay 865 ms / centroid is low / RMS is quiet — I'll use it" | `time_fx`/`centroid`/`RMS` are fragile (an 865 ms "delay" was a reverb tail; centroid tracks which notes were held; RMS is performance + mastering). Delay/reverb come from research; centroid is directional shape only; level is the user's rig master (`output_db` stays 0). Never a target. |
 | "I'll toss extra amps/pedals into the research to see what scores" | Rule A: the research is the artist's actual gear, cited. The engine picks among research-derived options only; padding with unrelated gear to fish for a score is the anti-pattern. Thin research → dig deeper, not wider with guesses. |
 | "Only one chain matches / the user pre-confirmed it earlier" | Step 3.1 always renders the menu and waits for the pick, even with one match. Unless you can paste a verbatim "use chain X" from THIS turn, they did not pre-confirm. Cross-session memory is forbidden. |
+| "I already checked the sources while researching — the auditor is redundant" | Self-verification is what let the invented reverb onto 38 presets. The auditor re-fetches every URL without trusting the writer; the build waits for its PASS. |
+| "The auditor FAILed one block — I'll delete it from the JSON myself and build" | You never edit the research. The report goes back to `gear-researcher`, then re-audit, so the file that builds is the one the auditor passed. |
 | "The Metallica riff is obviously high_gain — I'll skip the fingerprint / research first" | Step 0 is unconditional and comes before research. The WAV could be a cover, a different take, a clean mix; research-first biases toward what sounds right on paper. Cultural prior + "obvious" = the failure this skill blocks. |
 | "The user corrected me — I'll save the lesson to memory" | Local memory is per-machine, doesn't ship with the plugin. A correction becomes an edit in `SKILL.md` or the project's `CLAUDE.md`. |
 | "MCP isn't connected, I'll just write the YAML" | The file-only path is a first-class valid path — but the user picked the path in Step −1. Don't silently switch; if they chose MCP, stop and ask. |
