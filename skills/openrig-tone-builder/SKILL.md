@@ -841,12 +841,12 @@ ship past it.
 ### 4a. A researched capture is genuinely not in the catalog → `tone3000-fetch`
 
 When `resolve_gear` reports a slot `unresolved` and the gear is REAL but not installed
-(not just a vague name), the default proposal is **`openrig:openrig-tone3000-fetch`** —
+(not just a vague name), the default proposal is **`claude-plugin:openrig-tone3000-fetch`** —
 substitution with a different plugin is a last resort, only after import was attempted
 and failed OR the user refused. Ask, leading with import:
 
 > "For the [amp/cab/...] the canonical capture (`<gear name>`) isn't in the catalog.
-> I'll attempt to import it from tone3000 via `openrig:openrig-tone3000-fetch <query>` —
+> I'll attempt to import it from tone3000 via `claude-plugin:openrig-tone3000-fetch <query>` —
 > this gets the authentic capture, though it triggers the issue → PR → qa_audit/
 > pack_plugins flow. Confirm to proceed, or tell me to pick a different path."
 > *(render in the user's language at runtime)*

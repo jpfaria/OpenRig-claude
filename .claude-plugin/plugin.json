@@ -1,7 +1,7 @@
 {
   "name": "claude-plugin",
   "description": "Control a running OpenRig rig from any AI client: build tones, tweak the chain, switch presets — driven through OpenRig's MCP server.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": {
     "name": "João Paulo"
   },
