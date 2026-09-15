@@ -864,6 +864,33 @@ def refine_eq(
 
 # --- real subprocess wiring (CLI) ------------------------------------------
 
+RENDER_SAMPLE_RATE_HZ = 48000
+
+
+def di_at_render_rate(di_path: str, work_dir: str | os.PathLike) -> str:
+    """Return a DI path the renderer plays at the right speed.
+
+    openrig-render does NOT resample --input: it treats the samples as if they
+    were at the engine rate (48 kHz). A 44.1 kHz DI renders 8.8 % fast and
+    ~1.5 semitones sharp, so every measurement on it is out of tune. A 48 kHz
+    DI is returned as-is; anything else is resampled into ``work_dir``.
+    """
+    import soundfile as sf
+    from scipy.signal import resample_poly
+
+    data, sr = sf.read(di_path, dtype="float32", always_2d=True)
+    if sr == RENDER_SAMPLE_RATE_HZ:
+        return di_path
+    g = math.gcd(RENDER_SAMPLE_RATE_HZ, sr)
+    out = Path(work_dir) / f"di-{RENDER_SAMPLE_RATE_HZ}.wav"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    y = resample_poly(data, RENDER_SAMPLE_RATE_HZ // g, sr // g, axis=0).astype("float32")
+    sf.write(str(out), y, RENDER_SAMPLE_RATE_HZ, subtype="FLOAT")
+    print(f"note: DI resampled {sr} Hz -> {RENDER_SAMPLE_RATE_HZ} Hz "
+          f"(openrig-render does not resample its input)", file=sys.stderr)
+    return str(out)
+
+
 def _render_bin_runnable(path: str | os.PathLike | None) -> bool:
     """True if `path` resolves to a runnable openrig-render binary (found on PATH
     or an executable file on disk). The reference-less fallback uses this: when a
@@ -1095,6 +1122,8 @@ def main(argv=None, *, render_fn=None) -> int:
         raise SystemExit("the referenced path (--ref) requires --di (the bundled DI WAV to render through)")
     work = out_preset.parent / f".{preset_id}-build"
     work.mkdir(parents=True, exist_ok=True)
+    if render_fn is None:
+        args.di = di_at_render_rate(args.di, work)
 
     env = dict(os.environ)
     if args.plugins_root:
