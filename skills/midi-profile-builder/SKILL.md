@@ -1,5 +1,5 @@
 ---
-name: openrig-midi-profile-builder
+name: midi-profile-builder
 description: "Use when the user asks to author a MIDI profile for a controller OpenRig doesn't ship a factory profile for yet, customise an existing profile, or convert a MIDI Monitor / receivemidi capture into a profile YAML. Triggers: \"cria profile MIDI pro [pedal]\", \"meu Chocolate / FCB1010 / iRig BlueBoard / Behringer / Morningstar MC8 não tem profile\", \"converte este log do MIDI Monitor em profile\", \"adapta o profile do Chocolate pro meu setup\", \"build a MIDI profile\". Writes `<name>.yaml` + `<name>.md` either to the user's per-app dir (custom) or to the OpenRig repo `assets/midi-profiles/` (factory contribution)."
 ---
 

@@ -20,20 +20,20 @@ Trae **cinco skills** que cubren el ciclo completo de OpenRig — de la idea al 
 
 | Skill | Qué hace | Di algo como |
 |-------|----------|--------------|
-| **openrig-tone-builder** | Investiga la cadena de señal original de una canción o artista, la mapea a bloques de OpenRig y la guarda como un **nuevo preset con nombre** (nunca sobrescribe). Aplica sobre la rig viva vía MCP, o escribe un preset YAML — pregunta cuál, una vez. | *"timbre da Duality"*, *"recrea el tono de Slipknot"*, *"arma un preset para [canción]"* |
+| **tone-builder** | Investiga la cadena de señal original de una canción o artista, la mapea a bloques de OpenRig y la guarda como un **nuevo preset con nombre** (nunca sobrescribe). Aplica sobre la rig viva vía MCP, o escribe un preset YAML — pregunta cuál, una vez. | *"timbre da Duality"*, *"recrea el tono de Slipknot"*, *"arma un preset para [canción]"* |
 
 ### 📦 Hacer crecer la biblioteca de equipos
 
 | Skill | Qué hace | Di algo como |
 |-------|----------|--------------|
-| **openrig-plugin-author** | Empaqueta tus capturas `.nam` e IRs `.wav` locales en una carpeta de plugin de OpenRig, infiriendo los ejes de parámetro desde los nombres de archivo y redactando un `manifest.yaml`. | *"crea un plugin con estos .nam"*, *"arma la carpeta del plugin de IR"* |
-| **openrig-tone3000-fetch** | Descubre, busca e importa packs de IR/NAM de [tone3000.com](https://tone3000.com) directo en `OpenRig-plugins`, y luego deriva al dev-flow del repo (issue → solver → gate de QA → PR). | *"novedades de tone3000"*, *"busca un IR de Mesa Rectifier en tone3000"*, *"import tone3000 \<id\>"* |
+| **plugin-author** | Empaqueta tus capturas `.nam` e IRs `.wav` locales en una carpeta de plugin de OpenRig, infiriendo los ejes de parámetro desde los nombres de archivo y redactando un `manifest.yaml`. | *"crea un plugin con estos .nam"*, *"arma la carpeta del plugin de IR"* |
+| **tone3000-fetch** | Descubre, busca e importa packs de IR/NAM de [tone3000.com](https://tone3000.com) directo en `OpenRig-plugins`, y luego deriva al dev-flow del repo (issue → solver → gate de QA → PR). | *"novedades de tone3000"*, *"busca un IR de Mesa Rectifier en tone3000"*, *"import tone3000 \<id\>"* |
 
 ### 🎛️ Controlar hardware
 
 | Skill | Qué hace | Di algo como |
 |-------|----------|--------------|
-| **openrig-midi-profile-builder** | Crea un profile MIDI para un controlador de piso que OpenRig aún no trae de fábrica, personaliza uno existente, o convierte una captura de MIDI Monitor / `receivemidi` en un profile YAML. | *"crea un profile MIDI para mi FCB1010"*, *"mi Morningstar MC8 no tiene profile"*, *"convierte este log de MIDI Monitor en profile"* |
+| **midi-profile-builder** | Crea un profile MIDI para un controlador de piso que OpenRig aún no trae de fábrica, personaliza uno existente, o convierte una captura de MIDI Monitor / `receivemidi` en un profile YAML. | *"crea un profile MIDI para mi FCB1010"*, *"mi Morningstar MC8 no tiene profile"*, *"convierte este log de MIDI Monitor en profile"* |
 
 ### Cómo encajan
 
@@ -53,7 +53,7 @@ midi-profile-builder ──▶ profile del controlador de piso para cambiar pres
 
 ```
 /plugin marketplace add jpfaria/OpenRig-claude
-/plugin install claude-plugin@openrig
+/plugin install openrig@openrig
 ```
 
 Arranca OpenRig con el servidor MCP encendido:
@@ -71,7 +71,7 @@ El `.mcp.json` del plugin conecta dos servidores MCP automáticamente — sin co
 
 - **OpenRig** corriendo con `--mcp` (para todo lo que toca la rig viva).
 - **Node.js** (`npx`) — para el navegador Playwright usado en la investigación de timbres.
-- **Plugin tone-analyzer** — `/plugin marketplace add jpfaria/tone-analyzer` y luego `/plugin install tone-analyzer@tone-analyzer`. Python 3.11+; hace bootstrap de un virtualenv en el primer uso. El motor offline del tone-builder instala el mismo paquete vía `skills/openrig-tone-builder/bootstrap.sh`.
+- **Plugin tone-analyzer** — `/plugin marketplace add jpfaria/tone-analyzer` y luego `/plugin install tone-analyzer@tone-analyzer`. Python 3.11+; hace bootstrap de un virtualenv en el primer uso. El motor offline del tone-builder instala el mismo paquete vía `skills/tone-builder/bootstrap.sh`.
 
 ### Claude Desktop
 
@@ -80,7 +80,7 @@ Settings → **Connectors** → Add custom connector → URL `http://127.0.0.1:4
 ## Actualización
 
 ```
-/plugin update claude-plugin@openrig
+/plugin update openrig@openrig
 ```
 
 O habilita **auto-update** para el marketplace en el panel `/plugin` (pestaña Marketplaces → selecciona `openrig` → Enable auto-update). El cliente actualiza al iniciar la sesión.

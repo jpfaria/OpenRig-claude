@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline single-tone preset builder -- the deterministic "FORM" of the
-openrig-tone-builder skill as ONE portable tool. Builds ONE tone per run.
+tone-builder skill as ONE portable tool. Builds ONE tone per run.
 
 The caller (the tone-builder FORM) researches the COMPLETE rig and writes it as
 a **base-chain YAML**: a flat `blocks:` list in signal order, where every

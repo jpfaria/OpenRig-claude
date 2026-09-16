@@ -1,7 +1,7 @@
 ---
 name: gear-researcher
-description: Use when the openrig-tone-builder skill needs the original signal chain of ONE song + role (rhythm / lead / solo / clean) researched from cited web sources and written as the tone-builder research JSON — including a re-research after a research-auditor FAIL or a build_preset `unresolved` abort. Not for chatting about gear, not for building or persisting presets.
-tools: WebSearch, WebFetch, Read, Write, Glob, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_wait_for, mcp__playwright__browser_click, mcp__plugin_claude-plugin_playwright__browser_navigate, mcp__plugin_claude-plugin_playwright__browser_snapshot, mcp__plugin_claude-plugin_playwright__browser_wait_for, mcp__plugin_claude-plugin_playwright__browser_click
+description: Use when the tone-builder skill needs the original signal chain of ONE song + role (rhythm / lead / solo / clean) researched from cited web sources and written as the tone-builder research JSON — including a re-research after a research-auditor FAIL or a build_preset `unresolved` abort. Not for chatting about gear, not for building or persisting presets.
+tools: WebSearch, WebFetch, Read, Write, Glob, mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, mcp__playwright__browser_wait_for, mcp__playwright__browser_click, mcp__plugin_openrig_playwright__browser_navigate, mcp__plugin_openrig_playwright__browser_snapshot, mcp__plugin_openrig_playwright__browser_wait_for, mcp__plugin_openrig_playwright__browser_click
 ---
 
 You research the real guitar rig used on ONE recording and write it as a research JSON

@@ -1,6 +1,6 @@
 """Tests for the offline single-tone preset builder (scripts/build_preset.py).
 
-build_preset is the deterministic "FORM" of the openrig-tone-builder skill as
+build_preset is the deterministic "FORM" of the tone-builder skill as
 ONE portable tool: measure the reference once, search amp x drive (+ a cab ONLY
 when the chosen CORE is a `type: preamp`) for the best spectral proximity, refine
 the 8-band EQ with a CAPPED (+/-6 dB) trim that HOLDS the dead-top / out-of-range

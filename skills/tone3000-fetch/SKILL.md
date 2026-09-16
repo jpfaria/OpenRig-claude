@@ -1,5 +1,5 @@
 ---
-name: openrig-tone3000-fetch
+name: tone3000-fetch
 description: "Use when the user asks to discover, search, or import IR/NAM packs from tone3000.com into OpenRig-plugins (\"novidades do tone3000\", \"latest tone3000 packs\", \"procura IR de Mesa Rectifier no tone3000\", \"import tone3000 <id>\", \"traz o pack <id>\"). Drives the Supabase API of tone3000.com directly via curl + writes the draft manifest into a caller-provided directory. API and draft manifest only — nothing else."
 ---
 
@@ -262,7 +262,7 @@ captures:
 - `pedal` + tags contain `delay`/`reverb`/`chorus`/`modulation` → `fx_pedal`; else `gain_pedal`.
 - `full-rig`, `outboard` → emit a `# TODO: <gear> not directly representable; pick type manually` comment, leave the field blank for the user.
 
-**REQUIRED SUB-SKILL:** derive this block per `openrig-manifest-parameters`
+**REQUIRED SUB-SKILL:** derive this block per `manifest-parameters`
 (the canonical method). Summary below.
 
 **Parameter axes are MANDATORY — never a flat `model` dump.** The
@@ -352,4 +352,4 @@ skill in OpenRig-plugins).
 
 - Data repo: [`jpfaria/OpenRig-plugins`](https://github.com/jpfaria/OpenRig-plugins) — where the imported pack lands. Holds the `tools/loudness_audit` and `tools/pack_plugins` binaries that gate the import.
 - Repo discipline: the `openrig-code-quality` skill in OpenRig-plugins (`.claude/skills/openrig-code-quality/SKILL.md`) — same dev-flow LAW.
-- Sibling skill: [`openrig-tone-builder`](../openrig-tone-builder/SKILL.md) — builds presets on the live rig; does not write files.
+- Sibling skill: [`tone-builder`](../tone-builder/SKILL.md) — builds presets on the live rig; does not write files.

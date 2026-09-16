@@ -1,6 +1,6 @@
 ---
 name: research-auditor
-description: Use when an openrig-tone-builder research JSON (`…/research/<role>-v<N>.json`) has just been written or revised and must be verified before `build_preset.py --research` runs — an adversarial, read-only check that every block's cited source actually names that unit for this song. Not for writing or fixing research.
+description: Use when an tone-builder research JSON (`…/research/<role>-v<N>.json`) has just been written or revised and must be verified before `build_preset.py --research` runs — an adversarial, read-only check that every block's cited source actually names that unit for this song. Not for writing or fixing research.
 tools: Read, WebFetch, WebSearch
 ---
 

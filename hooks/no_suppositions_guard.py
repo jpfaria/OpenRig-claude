@@ -4,7 +4,7 @@
 When the user's prompt is about real-world guitar gear / tone / an artist's
 rig, inject a reminder that any factual claim must be backed by a MEASURED
 number (the analyzer) or a source FETCHED this turn (WebSearch/WebFetch) —
-never training memory. Pairs with the openrig-tone-builder HARD RULE
+never training memory. Pairs with the tone-builder HARD RULE
 "no suppositions about real-world GEAR / tone / history".
 
 Pure stdlib, no deps. Reads the hook JSON on stdin; on a gear/tone question it
@@ -46,7 +46,7 @@ if GEAR.search(prompt) and ASKY.search(prompt):
         "(a) a number measured with the analyzer, OR (b) a source fetched THIS "
         "turn via WebSearch/WebFetch (cite the URL). If you have neither: "
         "WebSearch first, or label it explicitly '(unverified - from memory)'. "
-        "Your prior is never the basis. (openrig-tone-builder HARD RULE: no "
+        "Your prior is never the basis. (tone-builder HARD RULE: no "
         "suppositions about real-world gear/tone/history.)"
     )
 

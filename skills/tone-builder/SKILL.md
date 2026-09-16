@@ -1,5 +1,5 @@
 ---
-name: openrig-tone-builder
+name: tone-builder
 description: "Use when the user asks for a tone, timbre, or preset for a specific song or artist (\"timbre da Duality\", \"preset do Slipknot\", \"tom da [música]\", \"recreate the [song] sound\", \"build a [artist] preset\"). Researches the original signal chain in natural language, lets a deterministic tool resolve it to catalog gear, and saves it as a NAMED PRESET in the chain's bank — adding a NEW slot via `apply_rig_nav Preset(-1)`, never overwriting existing presets. ALWAYS asks the user once up front whether to commit via the live MCP rig or as a YAML file only."
 ---
 
@@ -18,7 +18,7 @@ starting; if not, tell the user to run:
 
 The offline engine (`build_preset.py`, Step 0b) lives in this skill's `scripts/`
 and installs the same analyzer as a pip dependency via `./bootstrap.sh` (run
-from `skills/openrig-tone-builder/`; idempotent).
+from `skills/tone-builder/`; idempotent).
 
 ## ⛔ THE PROCESS — feed RESEARCH, never type an id
 
@@ -552,8 +552,8 @@ ships next to the GUI (#741), the **same** `engine::offline::render_chain` the l
 rig uses, so an offline render is byte-identical. No live runtime, no MCP. Resolve
 **once, up front**:
 
-**1. `build_preset.py`** — `skills/openrig-tone-builder/scripts/build_preset.py`, run
-via its venv (`skills/openrig-tone-builder/.venv/bin/python`, after `./bootstrap.sh` in
+**1. `build_preset.py`** — `skills/tone-builder/scripts/build_preset.py`, run
+via its venv (`skills/tone-builder/.venv/bin/python`, after `./bootstrap.sh` in
 that directory — it pip-installs `tone_analyzer` from `jpfaria/tone-analyzer`).
 A standalone `resolve_gear.py` CLI also exists, for inspecting the resolved chain from
 a research JSON without rendering.
@@ -761,7 +761,7 @@ build is always offline.
 conversation: the web round-trips stay out of your context, and the JSON is checked by
 an agent that did not write it.
 
-Dispatch `claude-plugin:gear-researcher` (Agent tool) with:
+Dispatch `openrig:gear-researcher` (Agent tool) with:
 - `artist`, `song`, `role`;
 - `research_path` = `<openrig-evaluations-root>/<song-slug>/research/<role>-v<N>.json`
   (absolute, resolved in Step 0a);
@@ -774,7 +774,7 @@ schema, native param units) lives in the agent: `agents/gear-researcher.md` in t
 
 ### 2. Audit the research — dispatch `research-auditor`
 
-Dispatch `claude-plugin:research-auditor` with the same `research_path`. It re-fetches
+Dispatch `openrig:research-auditor` with the same `research_path`. It re-fetches
 every cited URL and returns `VERDICT: PASS | FAIL` with a per-block evidence table.
 
 - **PASS** → Step 4.
@@ -803,7 +803,7 @@ it can't back. You never edit this file; every change goes researcher → audito
 ### 4. Run `build_preset.py --research`
 
 ```bash
-skills/openrig-tone-builder/.venv/bin/python skills/openrig-tone-builder/scripts/build_preset.py \
+skills/tone-builder/.venv/bin/python skills/tone-builder/scripts/build_preset.py \
   --research     <…>/research/<role>-v<N>.json \
   --plugins-root <plugins source root>   # REQUIRED with --research (builds the catalog) \
   --ref          <…>/refs/<role>.wav \
@@ -841,12 +841,12 @@ ship past it.
 ### 4a. A researched capture is genuinely not in the catalog → `tone3000-fetch`
 
 When `resolve_gear` reports a slot `unresolved` and the gear is REAL but not installed
-(not just a vague name), the default proposal is **`claude-plugin:openrig-tone3000-fetch`** —
+(not just a vague name), the default proposal is **`openrig:tone3000-fetch`** —
 substitution with a different plugin is a last resort, only after import was attempted
 and failed OR the user refused. Ask, leading with import:
 
 > "For the [amp/cab/...] the canonical capture (`<gear name>`) isn't in the catalog.
-> I'll attempt to import it from tone3000 via `claude-plugin:openrig-tone3000-fetch <query>` —
+> I'll attempt to import it from tone3000 via `openrig:tone3000-fetch <query>` —
 > this gets the authentic capture, though it triggers the issue → PR → qa_audit/
 > pack_plugins flow. Confirm to proceed, or tell me to pick a different path."
 > *(render in the user's language at runtime)*

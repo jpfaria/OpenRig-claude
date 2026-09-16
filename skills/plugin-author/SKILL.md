@@ -1,9 +1,9 @@
 ---
-name: openrig-plugin-author
+name: plugin-author
 description: "Use when the user has local NAM captures or WAV IRs on disk and wants to package them as an OpenRig plugin folder (\"create a plugin from these .nam files\", \"scaffold an IR plugin\", \"gera plugin nam para …\", \"monta a pasta do plugin\"). Validates inputs, copies files into the correct OpenRig-plugins layout, runs parameter-axis inference on filenames, and writes a draft manifest.yaml. Stays out of git, issues, PRs, and the qa_audit/pack_plugins gate — the caller owns those."
 ---
 
-# openrig-plugin-author
+# plugin-author
 
 Pure scaffolder. Input: a `kind`, some files on disk, minimal metadata.
 Output: a folder under a user-supplied `dest` with the files in the right
@@ -122,12 +122,12 @@ Execute in order. Validation (1-3) happens BEFORE any write.
 ## Parameter-axis inference dictionary
 
 **REQUIRED METHOD:** derive the `parameters:`/`captures:` block per
-`openrig-manifest-parameters` (decompose each filename into the exact
+`manifest-parameters` (decompose each filename into the exact
 controls it encodes; knobs numeric, enums string; never a flat `model`
 of raw filenames, never an invented `low/mid/high` over real numeric
 settings). The dictionary below only seeds token matching.
 
-Same dictionary as `openrig-tone3000-fetch`. For each capture:
+Same dictionary as `tone3000-fetch`. For each capture:
 
 - Take the basename (no extension), lowercase it, token-split on `_`,
   `-`, space, and `.`.
@@ -252,8 +252,8 @@ failure class. No partial output left on disk.
 
 ## Related
 
-- Spec: `docs/superpowers/specs/2026-05-25-openrig-plugin-author-design.md` (in this repo).
-- Sibling skill: `openrig-tone3000-fetch` — discovers and downloads from
+- Spec: `docs/superpowers/specs/2026-05-25-plugin-author-design.md` (in this repo).
+- Sibling skill: `tone3000-fetch` — discovers and downloads from
   tone3000.com. A follow-up will refactor it to delegate the
   manifest-writing step here.
 - Data repo: `jpfaria/OpenRig-plugins` — holds `tools/loudness_audit`

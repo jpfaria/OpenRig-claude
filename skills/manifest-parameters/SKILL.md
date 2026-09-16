@@ -1,12 +1,12 @@
 ---
-name: openrig-manifest-parameters
+name: manifest-parameters
 description: "Use when authoring or fixing the parameters/captures block of an OpenRig plugin manifest.yaml — deciding the axes and values for NAM/IR captures, or when the OpenRig model picker shows a flat \"model\" dropdown, raw filenames as values, quoted numbers, or invented low/mid/high knobs. Triggers: \"parâmetros ficaram errados\", \"deveria ser um knob\", \"ainda está com model\", \"os parâmetros não batem com o arquivo\", reviewing manifest parameters, fixing a tone3000 import's params."
 ---
 
-# openrig-manifest-parameters
+# manifest-parameters
 
 How an OpenRig plugin's **parameters** are created. This is the canonical
-method; `openrig-plugin-author` and `openrig-tone3000-fetch` defer to it
+method; `plugin-author` and `tone3000-fetch` defer to it
 for the `parameters:`/`captures:` block.
 
 ## Core principle

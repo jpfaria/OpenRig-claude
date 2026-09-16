@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent venv setup for the openrig-tone-builder engine (build_preset.py & co).
+# Idempotent venv setup for the tone-builder engine (build_preset.py & co).
 # First run: ~30-60 s (creates .venv, installs pinned deps).
 # Subsequent runs: <1 s if requirements.txt hash is unchanged.
 
